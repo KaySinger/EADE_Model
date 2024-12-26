@@ -19,14 +19,14 @@ def equations(p, t, k):
     dpdt = np.zeros_like(p)
     dpdt[0] = - k[0] * p[0]
     dpdt[1] = k[0] * p[0] - k[1] * (p[1]**2)
-    for i in range(2, 40):
+    for i in range(2, 10):
         dpdt[i] = k[i-1] * (p[i-1]**2) - k[i] * (p[i]**2)
-    dpdt[40] = k[39] * (p[39]**2)
+    dpdt[10] = k[9] * (p[9]**2)
     return dpdt
 
 # 定义目标函数
 def objective_global(k):
-    initial_p = [10.0] + [0] * 40
+    initial_p = [10.0] + [0] * 10
     t = np.linspace(0, 200, 1000)
     # 求解微分方程
     sol = odeint(equations, initial_p, t, args=(k,))
@@ -66,50 +66,75 @@ def callback(xk):
         print(f"迭代次数 {len(objective_values) - 1}: 变化 = {change}, 精度 = {objective_values[-1]}")
 
 # 实现差分进化算法
-class DifferentialEvolutionSolver:
-    def __init__(self, func, bounds, strategy='rand1bin', mutation=0.7, recombination=0.7, seed=None):
-        self.func = func  # 优化目标函数
+class DifferentialEvolution:
+    def __init__(self, func, bounds, mutation_factor=0.8, crossover_prob=0.9, population_size=100, seed=None):
+        """
+        初始化 DE 算法参数
+        :param func: 目标函数
+        :param bounds: 搜索空间边界，格式为 [(min, max), (min, max), ...]
+        :param mutation_factor: 变异因子 (F)，默认为 0.8
+        :param crossover_prob: 交叉概率 (CR)，默认为 0.9
+        :param population_size: 种群大小，默认为 50
+        :param seed: 随机种子，默认为 None
+        """
+        self.func = func
         self.bounds = np.array(bounds)
-        self.strategy = strategy
-        self.mutation = mutation
-        self.recombination = recombination
+        self.mutation_factor = mutation_factor
+        self.crossover_prob = crossover_prob
+        self.population_size = population_size
+        self.num_dimensions = len(bounds)
         self.random_state = np.random.default_rng(seed)
-        self.num_params = len(bounds)
-        self.population_size = 10 * self.num_params  # 默认种群规模
-        self.limits = np.array(bounds)
-        self.population = self._init_population()
+        self.population = self._initialize_population()
         self.fitness = np.array([self.func(ind) for ind in self.population])
 
-    def _init_population(self):
-        """随机初始化种群"""
-        pop = self.random_state.uniform(self.limits[:, 0], self.limits[:, 1], size=(self.population_size, self.num_params))
-        return pop
+    def _initialize_population(self):
+        """初始化种群"""
+        return self.random_state.uniform(
+            low=self.bounds[:, 0],
+            high=self.bounds[:, 1],
+            size=(self.population_size, self.num_dimensions)
+        )
 
-    def _select_samples(self, candidate_idx, num_samples):
-        """从种群中选择不同于当前个体的样本"""
+    def _mutate_current_to_best(self, idx):
+        """
+        current-to-best/1 变异策略
+        :param idx: 当前个体的索引
+        :return: donor 向量
+        """
+        best_idx = np.argmin(self.fitness)  # 当前最优个体
+        a, b = self._select_random_indices(idx, 2)  # 随机选择两个不同的个体
+        donor = (self.population[idx] +
+                 self.mutation_factor * (self.population[best_idx] - self.population[idx]) +
+                 self.mutation_factor * (self.population[a] - self.population[b]))
+        return donor
+
+    def _select_random_indices(self, idx, num_samples):
+        """
+        随机选择不同于当前个体的索引
+        :param idx: 当前个体的索引
+        :param num_samples: 需要选择的样本数量
+        :return: 选择的索引列表
+        """
         indices = list(range(self.population_size))
-        indices.remove(candidate_idx)
-        chosen = self.random_state.choice(indices, num_samples, replace=False)
-        return chosen
+        indices.remove(idx)
+        return self.random_state.choice(indices, num_samples, replace=False)
 
-    def _rand1_bin(self, candidate_idx):
-        """rand/1/bin策略的实现"""
-        r1, r2, r3 = self._select_samples(candidate_idx, 3)  # 选择三个个体
-        # 变异：生成 donor 向量
-        donor = (self.population[r1] +
-                 self.mutation * (self.population[r2] - self.population[r3]))
-        # 限制 donor 在边界范围内
-        donor = np.clip(donor, self.limits[:, 0], self.limits[:, 1])
-
-        # 二进制交叉
-        cross_points = self.random_state.random(self.num_params) < self.recombination
+    def _crossover(self, target, donor):
+        """
+        二项式交叉
+        :param target: 目标向量
+        :param donor: donor 向量
+        :return: 试验向量
+        """
+        cross_points = self.random_state.random(self.num_dimensions) < self.crossover_prob
         if not np.any(cross_points):
-            # 确保至少有一个维度发生交叉
-            cross_points[self.random_state.integers(0, self.num_params)] = True
-
-        # 生成试验向量 trial
-        trial = np.where(cross_points, donor, self.population[candidate_idx])
+            cross_points[self.random_state.integers(0, self.num_dimensions)] = True
+        trial = np.where(cross_points, donor, target)
         return trial
+
+    def _clip_to_bounds(self, individual):
+        """将个体限制在搜索空间范围内"""
+        return np.clip(individual, self.bounds[:, 0], self.bounds[:, 1])
 
     def solve(self, max_iter=1000, tol=1e-6):
         """
@@ -119,15 +144,17 @@ class DifferentialEvolutionSolver:
         :return: 最优解和对应目标值
         """
         best_fitness_history = []  # 记录每次迭代的最优目标值
-        iteration = 0  # 记录迭代次数
 
         for iteration in range(max_iter):
             for idx in range(self.population_size):
-                if self.strategy == 'rand1bin':
-                    trial = self._rand1_bin(idx)
-                else:
-                    raise ValueError(f"策略 {self.strategy} 未实现")
+                # 变异：current-to-best/1
+                donor = self._mutate_current_to_best(idx)
+                donor = self._clip_to_bounds(donor)
 
+                # 交叉
+                trial = self._crossover(self.population[idx], donor)
+
+                # 选择
                 trial_fitness = self.func(trial)
                 if trial_fitness < self.fitness[idx]:
                     self.population[idx] = trial
@@ -138,11 +165,11 @@ class DifferentialEvolutionSolver:
             current_best_fitness = self.fitness[best_idx]
             best_fitness_history.append(current_best_fitness)
 
-            print(f"Iteration {iteration + 1}: Objective Fitness = {current_best_fitness}")
+            print(f"Iteration {iteration + 1}: Best Fitness = {current_best_fitness}")
 
-            # 检查收敛条件
-            if iteration > 0 and abs(best_fitness_history[-1] - best_fitness_history[-2]) < tol and current_best_fitness < 1e-6:
-                print(f"在第 {iteration} 次迭代时达到收敛精度：{tol}")
+            # 检查精度终止条件
+            if current_best_fitness <= tol:
+                print(f"Converged at generation {iteration} with precision {current_best_fitness:.6e}")
                 break
 
         # 返回最终最优解和目标值
@@ -161,38 +188,38 @@ def visualize_fitness():
     plt.show()
 
 # 设置变量边界
-bounds = np.array([(0, 10)] * 40)
+bounds = np.array([(1.0, 10)] + [(0.01, 10)] * 9)
 
 # 求得理想最终浓度
-target_p = simulate_normal_distribution(mu=20.5, sigma=8, total_concentration=1.0, x_values=np.arange(1, 41), scale_factor=10.0)
-x_values = [f'P{i}' for i in range(1, 41)]  # 定义图像横坐标
+target_p = simulate_normal_distribution(mu=5.5, sigma=8, total_concentration=1.0, x_values=np.arange(1, 11), scale_factor=10.0)
+x_values = [f'P{i}' for i in range(1, 11)]  # 定义图像横坐标
 print("理想最终浓度", {f'P{i}': c for i, c in enumerate(target_p, start=1)})
 
 # 运行差分进化算法
 objective_values.clear()
 mse_values.clear()
-result = DifferentialEvolutionSolver(objective_global, bounds, strategy='rand1bin', mutation=0.7, recombination=0.7, seed=42)
+result = DifferentialEvolution(objective_global, bounds, mutation_factor=0.8, crossover_prob=0.9, population_size=100, seed=42)
 optimal_k, final_precision, fitness_history = result.solve(max_iter=1000, tol=1e-6)
 print("全局优化得到的系数k:", {f'k{i}': c for i, c in enumerate(optimal_k, start=0)})
 print("最终精度:", final_precision)
 
 visualize_fitness()
 
-# 梯度优化，进一步提高精度
-print("开始梯度优化")
-
-objective_values.clear()
-mse_values.clear()
-
-result_final = minimize(objective_local, optimal_k, method='L-BFGS-B', bounds=bounds, callback=callback, tol=1e-8)
-optimal_k = result_final.x
-final_precision = result_final.fun
-
-print("反应系数K是:", {f"k{i}:": c for i, c in enumerate(optimal_k, start=0)})
-print("最终优化精度:", final_precision)
+# # 梯度优化，进一步提高精度
+# print("开始梯度优化")
+#
+# objective_values.clear()
+# mse_values.clear()
+#
+# result_final = minimize(objective_local, optimal_k, method='L-BFGS-B', bounds=bounds, callback=callback, tol=1e-8)
+# optimal_k = result_final.x
+# final_precision = result_final.fun
+#
+# print("反应系数K是:", {f"k{i}:": c for i, c in enumerate(optimal_k, start=0)})
+# print("最终优化精度:", final_precision)
 
 # 使用得到的系数求解
-initial_p = [10.0] + [0] * 40
+initial_p = [10.0] + [0] * 10
 t = np.linspace(0, 200, 1000)
 sol = odeint(equations, initial_p, t, args=(optimal_k,))
 
@@ -220,32 +247,32 @@ plt.title('P0-P10 Concentration over Time')
 plt.grid(True)
 plt.show()
 
-plt.figure(figsize=(15, 8))
-for i in range(11, 21):
-    plt.plot(t, sol[:, i], label=f'p{i}')
-plt.legend()
-plt.xlabel('Time')
-plt.ylabel('Concentration')
-plt.title('P11-P20 Concentration over Time')
-plt.grid(True)
-plt.show()
-
-plt.figure(figsize=(15, 8))
-for i in range(21, 31):
-    plt.plot(t, sol[:, i], label=f'p{i}')
-plt.legend()
-plt.xlabel('Time')
-plt.ylabel('Concentration')
-plt.title('P21-P30 Concentration over Time')
-plt.grid(True)
-plt.show()
-
-plt.figure(figsize=(15, 8))
-for i in range(31, 41):
-    plt.plot(t, sol[:, i], label=f'p{i}')
-plt.legend()
-plt.xlabel('Time')
-plt.ylabel('Concentration')
-plt.title('P31-P40 Concentration over Time')
-plt.grid(True)
-plt.show()
+# plt.figure(figsize=(15, 8))
+# for i in range(11, 21):
+#     plt.plot(t, sol[:, i], label=f'p{i}')
+# plt.legend()
+# plt.xlabel('Time')
+# plt.ylabel('Concentration')
+# plt.title('P11-P20 Concentration over Time')
+# plt.grid(True)
+# plt.show()
+#
+# plt.figure(figsize=(15, 8))
+# for i in range(21, 31):
+#     plt.plot(t, sol[:, i], label=f'p{i}')
+# plt.legend()
+# plt.xlabel('Time')
+# plt.ylabel('Concentration')
+# plt.title('P21-P30 Concentration over Time')
+# plt.grid(True)
+# plt.show()
+#
+# plt.figure(figsize=(15, 8))
+# for i in range(31, 41):
+#     plt.plot(t, sol[:, i], label=f'p{i}')
+# plt.legend()
+# plt.xlabel('Time')
+# plt.ylabel('Concentration')
+# plt.title('P31-P40 Concentration over Time')
+# plt.grid(True)
+# plt.show()

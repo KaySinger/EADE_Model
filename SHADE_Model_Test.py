@@ -42,18 +42,7 @@ def shade(func, bounds, pop_size=None, max_gen=None, hist_size=10, tol=1e-6):
     H = hist_size
     F_hist, CR_hist = [0.5] * H, [0.5] * H
     hist_idx = 0
-    iteration_log = []  # 用于记录每代最优解
-
-    # 用 LHS 初始化种群
-    def latin_hypercube_sampling(bounds, pop_size):
-        population = np.zeros((pop_size, len(bounds)))
-        for i in range(len(bounds)):
-            intervals = np.linspace(0, 1, pop_size + 1)[:-1]
-            points = intervals + np.random.uniform(0, 1 / pop_size, pop_size)
-            np.random.shuffle(points)
-            lb, ub = bounds[i]
-            population[:, i] = lb + points * (ub - lb)
-        return population
+    iteration_log = []
 
     # 初始化种群
     pop = np.random.uniform(low=[b[0] for b in bounds], high=[b[1] for b in bounds], size=(pop_size, dim))
@@ -74,16 +63,18 @@ def shade(func, bounds, pop_size=None, max_gen=None, hist_size=10, tol=1e-6):
         for i in range(pop_size):
             # 从成功历史记录中采样 F 和 CR
             hist_sample = np.random.randint(0, H)
-            F = np.clip(np.random.normal(F_hist[hist_sample], 0.1), 0, 1)
+            F = np.clip(np.random.standard_cauchy() * 0.1 + F_hist[hist_sample], 0, 1)
             CR = np.clip(np.random.normal(CR_hist[hist_sample], 0.1), 0, 1)
             F_values.append(F)
             CR_values.append(CR)
 
-            # current-to-best/1 变异策略
-            best_idx = np.argmin(fitness)
-            best = pop[best_idx]
+            # current-to-pbest/1 变异策略
+            p_best_size = int(pop_size * 0.1)
+            p_best_indices = np.argsort(fitness)[:p_best_size]
+            p_best_idx = np.random.choice(p_best_indices)
+            p_best = pop[p_best_idx]
             a, b = pop[np.random.choice(pop_size, 2, replace=False)]
-            mutant = pop[i] + F * (best - pop[i]) + F * (a - b)
+            mutant = pop[i] + F * (p_best - pop[i]) + F * (a - b)
             mutant = np.clip(mutant, [b[0] for b in bounds], [b[1] for b in bounds])
 
             # 二项交叉
@@ -102,12 +93,15 @@ def shade(func, bounds, pop_size=None, max_gen=None, hist_size=10, tol=1e-6):
 
         # 更新种群和外部存档
         pop = np.array(new_pop)
-        archive = archive[-pop_size:]  # 限制存档大小
+        if len(archive) > pop_size:
+            archive.pop(np.random.randint(0, len(archive)))
 
         # 更新成功历史记录
         if S_F and S_CR:
-            F_hist[hist_idx] = np.mean(S_F)
-            CR_hist[hist_idx] = np.mean(S_CR)
+            weights = np.array([abs(fitness[i] - trial_fitness) for i in range(len(S_F))])
+            weights /= np.sum(weights)
+            F_hist[hist_idx] = np.sum(weights * np.array(S_F))
+            CR_hist[hist_idx] = np.sum(weights * np.array(S_CR))
             hist_idx = (hist_idx + 1) % H
 
         print(f"当前迭代次数{gen + 1}, 迭代精度{np.min(fitness)}")

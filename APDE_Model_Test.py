@@ -74,6 +74,8 @@ def parameter_adaptive_de(
     dim = len(bounds)
     NP = initial_scale * NP
     min_NP = min_scale * NP
+
+    # 种群初始化：均匀随机初始化
     pop = np.random.rand(NP, dim) * (bounds[:, 1] - bounds[:, 0]) + bounds[:, 0]
     fitness = np.array([fobj(ind) for ind in pop])
     best_idx = np.argmin(fitness)
@@ -81,8 +83,12 @@ def parameter_adaptive_de(
     best_fitness = fitness[best_idx]
     fitness_history = []
 
-    archive = []
-    mu_F, mu_CR = F_init, CR_init
+    # 存档初始化：根据初始种群的表现选择较好的个体
+    archive_size = int(NP * 1.0)  # 初始存档大小与种群大小相同
+    sorted_indices = np.argsort(fitness)
+    archive = [pop[i] for i in sorted_indices[:archive_size]]
+
+    # 历史记录初始化
     H = 5  # 历史记录大小
     M_CR = np.full(H, 0.5)  # CR 的历史记录
     M_F = np.full(H, 0.5)   # F 的历史记录
@@ -143,10 +149,10 @@ def parameter_adaptive_de(
             pop = pop[sorted_indices[:new_NP]]
             fitness = fitness[sorted_indices[:new_NP]]
 
-        # 动态调整存档大小
+        # 动态调整存档大小：随机删除个体
         new_arc_size = int(new_NP * 1.0)  # arcRate = 1.0
-        if len(archive) > new_arc_size:
-            archive = archive[:new_arc_size]
+        while len(archive) > new_arc_size:
+            archive.pop(np.random.randint(0, len(archive)))
 
         # 检查终止条件
         if best_fitness <= tol:
