@@ -15,10 +15,10 @@ def simulate_normal_distribution(mu, sigma, total_concentration, x_values, scale
 def equations_1(p, t, k):
     dpdt = np.zeros_like(p)
     dpdt[0] = - k[0] * p[0]
-    dpdt[1] = k[0] * p[0] - k[1] * p[1] ** 2
+    dpdt[1] = k[0] * p[0] - k[1] * p[1]**2
     for i in range(2, 20):
-        dpdt[i] = k[i - 1] * p[i - 1] ** 2 - k[i] * p[i] ** 2
-    dpdt[20] = k[19] * p[19] ** 2
+        dpdt[i] = k[i - 1] * p[i - 1]**2 - k[i] * p[i]**2
+    dpdt[20] = k[19] * p[19]**2
     return dpdt
 
 # 定义非线性微分方程组
@@ -33,25 +33,23 @@ def equations_2(p, t, k_values):
     dpdt[40] = k[39] * p[39] ** 2 - k_inv[38] * p[40]
     return dpdt
 
-
 # 定义目标函数
 def objective_global(k):
     initial_p = [10.0] + [0] * 20
     t = np.linspace(0, 200, 1000)
     # 求解微分方程
     sol = odeint(equations_1, initial_p, t, args=(k,))
-    final_p = sol[-1, :] # 取最终浓度
+    final_p = sol[-1, 1:] # 取最终浓度
     # 理想最终浓度
-    ideal_p = [0] + list(target_p)
+    ideal_p = list(target_p)
     # 计算误差
     sum_error = np.sum((final_p - ideal_p)**2)
-    mse_error = sum_error / len(final_p)
 
     return sum_error
 
 # 定义目标函数
 def objective_local(k):
-    initial_p = [10.0] + [0] * 20
+    initial_p = [10.0] + [0] * 10
     t = np.linspace(0, 200, 1000)
     # 求解微分方程
     sol = odeint(equations_1, initial_p, t, args=(k,))
@@ -65,104 +63,108 @@ def objective_local(k):
     return mse_error
 
 
-def parameter_adaptive_de(
-        fobj, bounds, NP, max_iter=1000, tol=1e-6, F_init=0.5, CR_init=0.5,
-        p_min=0.1, p_max=0.9, initial_scale=15, min_scale=5):
-    """
-    参数自适应差分进化算法，基于 SHADE-like 记忆机制和 current-to-pbest/1 策略。
-    """
+def shade_improved(func, bounds, pop_size=None, max_gen=None, hist_size=10, tol=1e-6):
     dim = len(bounds)
-    NP = initial_scale * NP
-    min_NP = min_scale * NP
+    archive = []
+    H = hist_size
+    F_hist, CR_hist = [0.5] * H, [0.5] * H
+    hist_idx = 0
+    iteration_log = []
 
-    # 种群初始化：均匀随机初始化
-    pop = np.random.rand(NP, dim) * (bounds[:, 1] - bounds[:, 0]) + bounds[:, 0]
-    fitness = np.array([fobj(ind) for ind in pop])
-    best_idx = np.argmin(fitness)
-    best = pop[best_idx]
-    best_fitness = fitness[best_idx]
-    fitness_history = []
+    # 初始化种群
+    pop = np.random.uniform(low=[b[0] for b in bounds], high=[b[1] for b in bounds], size=(pop_size, dim))
+    fitness = np.apply_along_axis(func, 1, pop)
 
-    # 存档初始化：根据初始种群的表现选择较好的个体
-    archive_size = int(NP * 1.0)  # 初始存档大小与种群大小相同
-    sorted_indices = np.argsort(fitness)
-    archive = [pop[i] for i in sorted_indices[:archive_size]]
+    # 初始种群大小和存档大小
+    N_init = pop_size
+    N_min = 0.5 * pop_size
+    arcN_init = N_init
+    arcN_min = N_min
 
-    # 历史记录初始化
-    H = 5  # 历史记录大小
-    M_CR = np.full(H, 0.5)  # CR 的历史记录
-    M_F = np.full(H, 0.5)   # F 的历史记录
-    k = 0  # 历史记录索引
+    # 参数 p 的范围
+    p_max = 0.2
+    p_min = 0.05
 
-    for gen in range(max_iter):
-        S_CR, S_F = [], []
-        p = p_max - (p_max - p_min) * gen / max_iter  # 线性调整 p
-        prev_best_fitness = best_fitness
+    for gen in range(max_gen):
+        F_values, CR_values = [], []
+        S_F, S_CR = [], []
+        new_pop = []
 
-        for i in range(len(pop)):
-            # 生成 F 和 CR
-            R_i = np.random.randint(0, H)
-            CR_i = np.clip(np.random.normal(M_CR[R_i], 0.1), 0, 1)
-            F_i = np.clip(np.random.standard_cauchy() * 0.1 + M_F[R_i], 0, 1)
-
-            # 选择 pbest 个体
-            sorted_indices = np.argsort(fitness)
-            top_p_indices = sorted_indices[:max(1, int(p * len(pop)))]
-            pbest = pop[np.random.choice(top_p_indices)]
-
-            # 变异：current-to-pbest/1
-            candidates = [idx for idx in range(len(pop)) if idx != i]
-            r1, r2 = np.random.choice(candidates, 2, replace=False)
-            mutant = pop[i] + F_i * (pbest - pop[i]) + F_i * (pop[r1] - pop[r2])
-
-            # 交叉
-            cross_points = np.random.rand(dim) < CR_i
-            if not np.any(cross_points):
-                cross_points[np.random.randint(0, dim)] = True
-            trial = np.where(cross_points, mutant, pop[i])
-
-            # 边界处理
-            trial = np.clip(trial, bounds[:, 0], bounds[:, 1])
-
-            # 选择
-            f_trial = fobj(trial)
-            if f_trial < fitness[i]:
-                pop[i] = trial
-                fitness[i] = f_trial
-                S_CR.append(CR_i)
-                S_F.append(F_i)
-                archive.append(trial)
-                if f_trial < best_fitness:
-                    best = trial
-                    best_fitness = f_trial
-
-        # 更新 CR 和 F 的历史记录
-        if S_CR and S_F:
-            M_CR[k] = np.mean(S_CR)
-            M_F[k] = np.sum(np.array(S_F) ** 2) / np.sum(S_F)  # Lehmer 平均值
-            k = (k + 1) % H
-
-        # 动态调整种群大小
-        new_NP = max(int(min_NP + (initial_scale * NP - min_NP) * (1 - gen / max_iter)), min_NP)
-        if new_NP < len(pop):
-            sorted_indices = np.argsort(fitness)
-            pop = pop[sorted_indices[:new_NP]]
-            fitness = fitness[sorted_indices[:new_NP]]
-
-        # 动态调整存档大小：随机删除个体
-        new_arc_size = int(new_NP * 1.0)  # arcRate = 1.0
-        while len(archive) > new_arc_size:
-            archive.pop(np.random.randint(0, len(archive)))
-
-        # 检查终止条件
-        if best_fitness <= tol:
-            print(f"Converged at generation {gen} with precision {best_fitness:.6e}")
+        # 检查精度终止条件
+        best_val = np.min(fitness)
+        iteration_log.append(best_val)
+        if best_val <= tol:
+            print(f"Converged at generation {gen} with precision {best_val:.6e}")
             break
 
-        print(f"当前迭代次数 {gen+1}, 迭代精度 {best_fitness}")
-        fitness_history.append(best_fitness)
+        # 计算当前迭代的种群大小和存档大小
+        N_G = round((N_min - N_init) / max_gen * gen + N_init)
+        arcN_G = round((arcN_min - arcN_init) / max_gen * gen + arcN_init)
 
-    return best, best_fitness, fitness_history
+        # 基于线性分布的参数自适应选择
+        if gen < max_gen / 3:
+            k1 = (p_max - p_min) * gen
+            p = p_max - k1 * (max_gen - gen) / max_gen
+        elif gen < 2 * max_gen / 3:
+            k2 = p_max - p_min + 2 * gen
+            p = p_max - k2 * gen / max_gen
+        else:
+            k3 = (p_max - p_min) * gen
+            p = p_min - k3 * (max_gen - gen) / max_gen
+
+        for i in range(N_G):
+            # 从成功历史记录中采样 F 和 CR
+            hist_sample = np.random.randint(0, H)
+            F = np.clip(np.random.standard_cauchy() * 0.1 + F_hist[hist_sample], 0, 1)
+            CR = np.clip(np.random.normal(CR_hist[hist_sample], 0.1), 0, 1)
+            F_values.append(F)
+            CR_values.append(CR)
+
+            # 改进的变异策略
+            # 确保 p_best_size 至少为 1
+            p_best_size = min(max(1, int(N_G * p)), N_G)
+
+            # 获取适应度值最优的 p_best_size 个个体
+            p_best_indices = np.argsort(fitness)[:p_best_size]
+
+            # 从 p_best_indices 中随机选择一个个体
+            p_best_idx = np.random.choice(p_best_indices)
+            p_best = pop[p_best_idx]
+            a, b = pop[np.random.choice(N_G, 2, replace=False)]
+            mutant = pop[i] + F * (p_best - pop[i]) + F * (a - b)
+            mutant = np.clip(mutant, [b[0] for b in bounds], [b[1] for b in bounds])
+
+            # 二项交叉
+            trial = np.array([mutant[j] if np.random.rand() < CR else pop[i][j] for j in range(dim)])
+            trial_fitness = func(trial)
+
+            # 贪心选择
+            if trial_fitness < fitness[i]:
+                new_pop.append(trial)
+                fitness[i] = trial_fitness
+                archive.append(pop[i])
+                S_F.append(F)
+                S_CR.append(CR)
+            else:
+                new_pop.append(pop[i])
+
+        # 更新种群和外部存档
+        pop = np.array(new_pop)
+        if len(archive) > arcN_G:
+            archive.pop(np.random.randint(0, len(archive)))
+
+        # 更新成功历史记录
+        if S_F and S_CR:
+            weights = np.array([abs(fitness[i] - trial_fitness) for i in range(len(S_F))])
+            weights /= np.sum(weights)
+            F_hist[hist_idx] = np.sum(weights * np.array(S_F))
+            CR_hist[hist_idx] = np.sum(weights * np.array(S_CR))
+            hist_idx = (hist_idx + 1) % H
+
+        print(f"当前迭代次数{gen + 1}, 迭代精度{np.min(fitness)}")
+
+    best_idx = np.argmin(fitness)
+    return pop[best_idx], fitness[best_idx], iteration_log
 
 def visualize_fitness():
     # 绘制目标函数和均方误差的收敛曲线
@@ -176,17 +178,15 @@ def visualize_fitness():
     plt.show()
 
 # 设置变量边界
-bounds_1 = np.array([(1, 2)] + [(0.01, 20)] * 19)
-bounds_2 = np.array([(0, None)] * 79)
+bounds = np.array([(5.0, 10.0)] + [(0.01, 10.0)] * 19)
 
 # 求得理想最终浓度
-target_p = simulate_normal_distribution(mu=10.5, sigma=8, total_concentration=1.0, x_values=np.arange(1, 21), scale_factor=10.0)
+target_p = simulate_normal_distribution(mu=10.5, sigma=6, total_concentration=1.0, x_values=np.arange(1, 21), scale_factor=10.0)
 x_values = [f'P{i}' for i in range(1, 21)]  # 定义图像横坐标
 print("理想最终浓度", {f'P{i}': c for i, c in enumerate(target_p, start=1)})
 
 # 运行差分进化算法
-best_solution, best_fitness, fitness_history = parameter_adaptive_de(objective_global, bounds=bounds_1, NP=20, max_iter=1000, tol=1e-6, F_init=0.5, CR_init=0.5,
-        p_min=0.1, p_max=0.9, initial_scale=15, min_scale=5)
+best_solution, best_fitness, fitness_history = shade_improved(objective_global, bounds, pop_size=200, max_gen=2000, hist_size=10, tol=1e-6)
 print("全局优化得到的系数k:", {f'k{i}': c for i, c in enumerate(best_solution, start=0)})
 print("最终精度:", best_fitness)
 
@@ -194,18 +194,6 @@ print("最终精度:", best_fitness)
 initial_p = [10.0] + [0] * 20
 t = np.linspace(0, 200, 1000)
 sol = odeint(equations_1, initial_p, t, args=(best_solution,))
-
-# 绘制理想稳态浓度曲线
-plt.figure(figsize=(15, 8))
-plt.xlabel("P-Species")
-plt.ylabel("P-Concentrations")
-plt.title("Ideal Concentrations and Actual Concentrations")
-plt.xticks(range(len(x_values)), x_values, rotation=90)
-final_concentrations = sol[-1, 1:]
-plt.plot(range(len(x_values)), target_p, label = 'Ideal Concentrations', marker='o', linestyle='-', color='blue')
-plt.plot(range(len(x_values)), final_concentrations, label = 'Actual Concentrations', marker='o', linestyle='-', color='red')
-plt.grid(True)
-plt.show()
 
 visualize_fitness()
 

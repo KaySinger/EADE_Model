@@ -67,7 +67,7 @@ def callback(xk):
 
 # 实现差分进化算法
 class DifferentialEvolution:
-    def __init__(self, func, bounds, mutation_factor=0.8, crossover_prob=0.9, population_size=100, seed=None):
+    def __init__(self, func, bounds, mutation_factor=0.8, crossover_prob=0.7, population_size=100, seed=None):
         """
         初始化 DE 算法参数
         :param func: 目标函数
