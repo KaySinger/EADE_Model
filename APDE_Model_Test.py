@@ -16,9 +16,9 @@ def equations_1(p, t, k):
     dpdt = np.zeros_like(p)
     dpdt[0] = - k[0] * p[0]
     dpdt[1] = k[0] * p[0] - k[1] * p[1]**2
-    for i in range(2, 20):
+    for i in range(2, 30):
         dpdt[i] = k[i - 1] * p[i - 1]**2 - k[i] * p[i]**2
-    dpdt[20] = k[19] * p[19]**2
+    dpdt[30] = k[29] * p[29]**2
     return dpdt
 
 # 定义非线性微分方程组
@@ -35,8 +35,8 @@ def equations_2(p, t, k_values):
 
 # 定义目标函数
 def objective_global(k):
-    initial_p = [10.0] + [0] * 20
-    t = np.linspace(0, 200, 1000)
+    initial_p = [10.0] + [0] * 30
+    t = np.linspace(0, 1000, 1000)
     # 求解微分方程
     sol = odeint(equations_1, initial_p, t, args=(k,))
     final_p = sol[-1, 1:] # 取最终浓度
@@ -50,7 +50,7 @@ def objective_global(k):
 # 定义目标函数
 def objective_local(k):
     initial_p = [10.0] + [0] * 10
-    t = np.linspace(0, 200, 1000)
+    t = np.linspace(0, 1000, 1000)
     # 求解微分方程
     sol = odeint(equations_1, initial_p, t, args=(k,))
     final_p = sol[-1, :] # 取最终浓度
@@ -63,7 +63,7 @@ def objective_local(k):
     return mse_error
 
 
-def shade_improved(func, bounds, pop_size=None, max_gen=None, hist_size=10, tol=1e-6):
+def shade_improved(func, bounds, pop_size=None, max_gen=None, hist_size=100, tol=1e-6):
     dim = len(bounds)
     archive = []
     H = hist_size
@@ -75,15 +75,13 @@ def shade_improved(func, bounds, pop_size=None, max_gen=None, hist_size=10, tol=
     pop = np.random.uniform(low=[b[0] for b in bounds], high=[b[1] for b in bounds], size=(pop_size, dim))
     fitness = np.apply_along_axis(func, 1, pop)
 
-    # 初始种群大小和存档大小
-    N_init = pop_size
-    N_min = 0.5 * pop_size
-    arcN_init = N_init
-    arcN_min = N_min
+    # 固定种群大小和存档大小
+    N_G = pop_size  # 固定为初始种群大小
+    arcN_G = pop_size  # 固定为初始存档大小
 
     # 参数 p 的范围
-    p_max = 0.2
-    p_min = 0.05
+    p_max = 0.1
+    p_min = 0.02
 
     for gen in range(max_gen):
         F_values, CR_values = [], []
@@ -97,20 +95,8 @@ def shade_improved(func, bounds, pop_size=None, max_gen=None, hist_size=10, tol=
             print(f"Converged at generation {gen} with precision {best_val:.6e}")
             break
 
-        # 计算当前迭代的种群大小和存档大小
-        N_G = round((N_min - N_init) / max_gen * gen + N_init)
-        arcN_G = round((arcN_min - arcN_init) / max_gen * gen + arcN_init)
-
         # 基于线性分布的参数自适应选择
-        if gen < max_gen / 3:
-            k1 = (p_max - p_min) * gen
-            p = p_max - k1 * (max_gen - gen) / max_gen
-        elif gen < 2 * max_gen / 3:
-            k2 = p_max - p_min + 2 * gen
-            p = p_max - k2 * gen / max_gen
-        else:
-            k3 = (p_max - p_min) * gen
-            p = p_min - k3 * (max_gen - gen) / max_gen
+        p = p_max - (p_max - p_min) * (gen / max_gen)
 
         for i in range(N_G):
             # 从成功历史记录中采样 F 和 CR
@@ -122,10 +108,14 @@ def shade_improved(func, bounds, pop_size=None, max_gen=None, hist_size=10, tol=
 
             # 改进的变异策略
             # 确保 p_best_size 至少为 1
-            p_best_size = min(max(1, int(N_G * p)), N_G)
+            p_best_size = max(1, int(N_G * p))
 
             # 获取适应度值最优的 p_best_size 个个体
             p_best_indices = np.argsort(fitness)[:p_best_size]
+
+            # 如果 p_best_indices 为空，选择当前最优个体
+            if len(p_best_indices) == 0:
+                p_best_indices = [np.argmin(fitness)]
 
             # 从 p_best_indices 中随机选择一个个体
             p_best_idx = np.random.choice(p_best_indices)
@@ -161,7 +151,7 @@ def shade_improved(func, bounds, pop_size=None, max_gen=None, hist_size=10, tol=
             CR_hist[hist_idx] = np.sum(weights * np.array(S_CR))
             hist_idx = (hist_idx + 1) % H
 
-        print(f"当前迭代次数{gen + 1}, 迭代精度{np.min(fitness)}")
+        print(f"当前迭代次数 {gen + 1}, 迭代精度 {np.min(fitness)}")
 
     best_idx = np.argmin(fitness)
     return pop[best_idx], fitness[best_idx], iteration_log
@@ -178,21 +168,21 @@ def visualize_fitness():
     plt.show()
 
 # 设置变量边界
-bounds = np.array([(5.0, 10.0)] + [(0.01, 10.0)] * 19)
+bounds = np.array([(2.0, 2.0)] + [(0.001, 10.0)] * 29)
 
 # 求得理想最终浓度
-target_p = simulate_normal_distribution(mu=10.5, sigma=6, total_concentration=1.0, x_values=np.arange(1, 21), scale_factor=10.0)
-x_values = [f'P{i}' for i in range(1, 21)]  # 定义图像横坐标
+target_p = simulate_normal_distribution(mu=15.5, sigma=6, total_concentration=1.0, x_values=np.arange(1, 31), scale_factor=10.0)
+x_values = [f'P{i}' for i in range(1, 31)]  # 定义图像横坐标
 print("理想最终浓度", {f'P{i}': c for i, c in enumerate(target_p, start=1)})
 
 # 运行差分进化算法
-best_solution, best_fitness, fitness_history = shade_improved(objective_global, bounds, pop_size=200, max_gen=2000, hist_size=10, tol=1e-6)
+best_solution, best_fitness, fitness_history = shade_improved(objective_global, bounds, pop_size=300, max_gen=3000, hist_size=100, tol=1e-6)
 print("全局优化得到的系数k:", {f'k{i}': c for i, c in enumerate(best_solution, start=0)})
 print("最终精度:", best_fitness)
 
 # 使用得到的系数求解
-initial_p = [10.0] + [0] * 20
-t = np.linspace(0, 200, 1000)
+initial_p = [10.0] + [0] * 30
+t = np.linspace(0, 1000, 1000)
 sol = odeint(equations_1, initial_p, t, args=(best_solution,))
 
 visualize_fitness()
@@ -251,22 +241,22 @@ plt.title('P11-P20 Concentration over Time')
 plt.grid(True)
 plt.show()
 
-# plt.figure(figsize=(15, 8))
-# for i in range(21, 31):
-#     plt.plot(t, sol[:, i], label=f'p{i}')
-# plt.legend()
-# plt.xlabel('Time')
-# plt.ylabel('Concentration')
-# plt.title('P21-P30 Concentration over Time')
-# plt.grid(True)
-# plt.show()
-#
-# plt.figure(figsize=(15, 8))
-# for i in range(31, 41):
-#     plt.plot(t, sol[:, i], label=f'p{i}')
-# plt.legend()
-# plt.xlabel('Time')
-# plt.ylabel('Concentration')
-# plt.title('P31-P40 Concentration over Time')
-# plt.grid(True)
-# plt.show()
+plt.figure(figsize=(15, 8))
+for i in range(21, 31):
+    plt.plot(t, sol[:, i], label=f'p{i}')
+plt.legend()
+plt.xlabel('Time')
+plt.ylabel('Concentration')
+plt.title('P21-P30 Concentration over Time')
+plt.grid(True)
+plt.show()
+
+plt.figure(figsize=(15, 8))
+for i in range(31, 41):
+    plt.plot(t, sol[:, i], label=f'p{i}')
+plt.legend()
+plt.xlabel('Time')
+plt.ylabel('Concentration')
+plt.title('P31-P40 Concentration over Time')
+plt.grid(True)
+plt.show()
