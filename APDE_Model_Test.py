@@ -16,9 +16,9 @@ def equations_1(p, t, k):
     dpdt = np.zeros_like(p)
     dpdt[0] = - k[0] * p[0]
     dpdt[1] = k[0] * p[0] - k[1] * p[1]**2
-    for i in range(2, 30):
+    for i in range(2, 40):
         dpdt[i] = k[i - 1] * p[i - 1]**2 - k[i] * p[i]**2
-    dpdt[30] = k[29] * p[29]**2
+    dpdt[40] = k[39] * p[39]**2
     return dpdt
 
 # 定义非线性微分方程组
@@ -35,7 +35,7 @@ def equations_2(p, t, k_values):
 
 # 定义目标函数
 def objective_global(k):
-    initial_p = [10.0] + [0] * 30
+    initial_p = [10.0] + [0] * 40
     t = np.linspace(0, 1000, 1000)
     # 求解微分方程
     sol = odeint(equations_1, initial_p, t, args=(k,))
@@ -49,7 +49,7 @@ def objective_global(k):
 
 # 定义目标函数
 def objective_local(k):
-    initial_p = [10.0] + [0] * 10
+    initial_p = [10.0] + [0] * 40
     t = np.linspace(0, 1000, 1000)
     # 求解微分方程
     sol = odeint(equations_1, initial_p, t, args=(k,))
@@ -168,20 +168,20 @@ def visualize_fitness():
     plt.show()
 
 # 设置变量边界
-bounds = np.array([(2.0, 2.0)] + [(0.001, 10.0)] * 29)
+bounds = np.array([(2.0, 2.0)] + [(0.001, 20.0)] * 39)
 
 # 求得理想最终浓度
-target_p = simulate_normal_distribution(mu=15.5, sigma=6, total_concentration=1.0, x_values=np.arange(1, 31), scale_factor=10.0)
-x_values = [f'P{i}' for i in range(1, 31)]  # 定义图像横坐标
+target_p = simulate_normal_distribution(mu=20.5, sigma=8, total_concentration=1.0, x_values=np.arange(1, 41), scale_factor=10.0)
+x_values = [f'P{i}' for i in range(1, 41)]  # 定义图像横坐标
 print("理想最终浓度", {f'P{i}': c for i, c in enumerate(target_p, start=1)})
 
 # 运行差分进化算法
-best_solution, best_fitness, fitness_history = shade_improved(objective_global, bounds, pop_size=300, max_gen=3000, hist_size=100, tol=1e-6)
+best_solution, best_fitness, fitness_history = shade_improved(objective_global, bounds, pop_size=400, max_gen=4000, hist_size=100, tol=1e-6)
 print("全局优化得到的系数k:", {f'k{i}': c for i, c in enumerate(best_solution, start=0)})
 print("最终精度:", best_fitness)
 
 # 使用得到的系数求解
-initial_p = [10.0] + [0] * 30
+initial_p = [10.0] + [0] * 40
 t = np.linspace(0, 1000, 1000)
 sol = odeint(equations_1, initial_p, t, args=(best_solution,))
 

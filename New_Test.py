@@ -207,10 +207,10 @@ def visualize_fitness():
     plt.show()
 
 # 设置变量边界
-bounds = np.array([(2.0, 2.0)] + [(0.01, 10.0)] * 39)
+bounds = np.array([(2.0, 2.0)] + [(0.001, 20.0)] * 39)
 
 # 求得理想最终浓度
-target_p = simulate_normal_distribution(mu=20.5, sigma=6, total_concentration=1.0, x_values=np.arange(1, 41), scale_factor=10.0)
+target_p = simulate_normal_distribution(mu=20.5, sigma=8, total_concentration=1.0, x_values=np.arange(1, 41), scale_factor=10.0)
 x_values = [f'P{i}' for i in range(1, 41)]  # 定义图像横坐标
 print("理想最终浓度", {f'P{i}': c for i, c in enumerate(target_p, start=1)})
 

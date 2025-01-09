@@ -1,182 +1,244 @@
 import numpy as np
+from scipy.optimize import minimize
 from scipy.integrate import odeint
-from scipy.optimize import differential_evolution, minimize
-from scipy.optimize import curve_fit
-import math, matplotlib
-matplotlib.use('TkAgg')
-import matplotlib.pyplot as plt
-
-# 记录迭代目标函数值和均方误差
-objective_values = []
-mse_values = []
-
-# 保存每一代的种群
-population_history = []
-
-# 初始 mutation 和 recombination 参数
-mutation_param = [1.0]  # 使用列表封装以便在回调函数中修改
-recombination_param = [0.7]
-
-# 定义微分方程
-def equations(p, t, k):
-    assert isinstance(k, (list, np.ndarray)), "k should be a list or numpy array"
-    dpdt = np.zeros_like(p)
-    dpdt[0] = -k[0] * p[0]
-    dpdt[1] = k[0] * p[0] - k[1] * p[1]**2
-    for i in range(2, 10):
-        dpdt[i] = k[i-1] * p[i-1]**2 - k[i] * p[i]**2
-    dpdt[10] = k[9] * p[9]**2
-    return dpdt
-
-# 定义目标函数，鼓励 k 值呈递减趋势
-def objective(k):
-    # 初始条件
-    assert isinstance(k, (list, np.ndarray)), "k should be a list or numpy array"
-    initial_p = [1.0] + [0] * 10  # 初始浓度 P0 = 1
-    t = np.linspace(0, 200, 1000)
-    # 求解微分方程
-    sol = odeint(equations, initial_p, t, args=(k,))
-    final_p = sol[-1, :]
-    # 目标浓度分布
-    target_distribution = [0] + list(concentrations)
-    # 计算 P1 到 P40 的误差
-    error = np.sum((final_p - target_distribution) ** 2)
-
-    mse = error / len(final_p)
-
-    # 记录
-    objective_values.append(error)
-    mse_values.append(mse)
-
-    return error
+from matplotlib import pyplot as plt
+from joblib import Parallel, delayed
 
 # 正态分布模拟，得到的结果用于物质稳态浓度
-def simulate_normal_distribution(mu, sigma, total_concentration, scale_factor):
-    x_values = np.arange(1, 11)
+def simulate_normal_distribution(mu, sigma, total_concentration, x_values, scale_factor):
     concentrations = np.exp(-0.5 * ((x_values - mu) / sigma) ** 2) / (sigma * np.sqrt(2 * np.pi))
     concentrations /= sum(concentrations)
     concentrations *= scale_factor
     return concentrations
 
-# 局部搜索函数，应用于优秀个体
-def local_search(individual):
-    # 使用 L-BFGS-B 方法对个体进行局部优化
-    result = minimize(
-        objective,
-        individual,
-        method='L-BFGS-B',
-        bounds=bounds,
-        options={'maxiter': 50}  # 限制局部优化的迭代次数
-    )
-    return result.x  # 返回优化后的个体
+# 定义非线性微分方程组
+def equations(p, t, k_values):
+    dpdt = np.zeros_like(p)
+    k = k_values[:20]
+    k_inv = k_values[20:]
+    dpdt[0] = - k[0] * p[0]
+    dpdt[1] = k[0] * p[0] + k_inv[0] * p[2] - k[1] * p[1] ** 2
+    for i in range(2, 20):
+        dpdt[i] = k[i - 1] * p[i - 1] ** 2 + k_inv[i - 1] * p[i + 1] - k_inv[i - 2] * p[i] - k[i] * p[i] ** 2
+    dpdt[20] = k[19] * p[19] ** 2 - k_inv[18] * p[20]
+    return dpdt
 
-def de_callback(xk, convergence=None):
-    global population_history, objective_values, mutation_param
+# 定义目标函数
+def objective_global(k):
+    initial_p = [10.0] + [0] * 20
+    t = np.linspace(0, 1000, 1000)
+    sol = odeint(equations, initial_p, t, args=(k,))
 
-    current_error = objective(xk)
-    objective_values.append(current_error)
-    population_history.append(np.copy(xk))
+    # 计算最终时间点的误差
+    final_error = np.sum((sol[-1, 1:] - target_p) ** 2)
 
-    if len(objective_values) > 1:
-        change = np.abs(objective_values[-1] - objective_values[-2])
-        print(f"迭代次数 {len(objective_values)}: 误差 = {current_error:.4f}, 变化 = {change:.4f}")
-        # 动态调整变异率
-        if change < 0.01:
-            mutation_param[0] = max(0.5, mutation_param[0] - 0.1)
+    # 计算浓度变化率
+    concentration_change = np.diff(sol[:, 1:], axis=0)
+    change_rate = np.sum(np.abs(concentration_change), axis=1)
 
-    # 每隔 10 次迭代，对部分优秀个体进行局部优化
-    if len(objective_values) % 10 == 0:
-        print("开始局部搜索...")
-        current_population = population_history[-1]
-        for i in range(len(current_population)):
-            individual = current_population[i]
-            # 确保个体是 numpy 数组
-            if not isinstance(individual, np.ndarray):
-                individual = np.array(individual)
-            # 检查个体的长度
-            assert len(individual) == 10, "个体长度不为10"
-            # 选择前25%的优秀个体进行局部优化
-            if objective(individual) < np.percentile(objective_values, 25):
-                optimized_individual = local_search(individual)
-                current_population[i] = optimized_individual
-        # 更新 xk 为当前种群中的最优个体
-        best_individual_index = np.argmin([objective(ind) for ind in current_population])
-        xk[:] = current_population[best_individual_index]
+    # 检查是否过早进入稳态
+    t_threshold = 800
+    if np.mean(change_rate[:t_threshold]) < 1e-6:  # 如果过早进入稳态
+        final_error += 1e6  # 增加一个大的惩罚项
 
-def visualize_convergence():
+    return final_error
+
+def rand1bin(pop, F, i):
+    r1, r2, r3 = np.random.choice(len(pop), 3, replace=False)
+    return pop[r1] + F * (pop[r2] - pop[r3])
+
+def rand2bin(pop, F, i):
+    r1, r2, r3, r4 = np.random.choice(len(pop), 4, replace=False)
+    return pop[r1] + F * (pop[r2] - pop[r3]) + F * (pop[r4] - pop[r1])
+
+
+# 定义current-to-pbest变异策略
+def de_current_to_pbest_1(X, F, i, pbest):
+    NP, D = X.shape
+    r1, r2 = np.random.choice(NP, 2, replace=False)
+    return X[i] + F * (pbest - X[i]) + F * (X[r1] - X[r2])
+
+def calculate_diversity(fitness):
+    """
+    计算种群多样性（适应度的标准差）
+    """
+    return np.std(fitness)
+
+def select_mutation_strategy(pop, fitness, i, F, diversity_threshold=0.1):
+    """
+    根据种群多样性动态选择变异策略
+    """
+    diversity = calculate_diversity(fitness)
+    if diversity < diversity_threshold:
+        # 多样性低，使用 rand2bin
+        return rand2bin(pop, F, i)
+    else:
+        # 多样性高，使用 rand1bin
+        return rand1bin(pop, F, i)
+
+
+def DPADE(func, bounds, pop_size=None, max_gen=None, hist_size=100, tol=1e-6):
+
+    dim = len(bounds)
+    archive = []
+    H = hist_size
+    F_hist, CR_hist = [0.5] * H, [0.5] * H
+    hist_idx = 0
+    iteration_log = []
+
+    # 初始化种群
+    pop = np.random.uniform(low=[b[0] for b in bounds], high=[b[1] for b in bounds], size=(pop_size, dim))
+    fitness = np.apply_along_axis(func, 1, pop)
+
+    # 控制参数自适应机制
+    F_min, F_max = 0.4, 0.8  # 缩放因子 F 的范围
+    CR_min, CR_max = 0.5, 0.9  # 交叉因子 CR 的范围
+    st_max = 20  # 停滞代数的上限
+    st_count = np.zeros(pop_size)  # 记录每个个体的停滞代数
+
+    # 固定参数 p
+    p_max = 0.1
+    p_min = 0.02
+
+    for gen in range(max_gen):
+        F_values, CR_values = [], []
+        S_F, S_CR = [], []
+        new_pop = []
+
+        # 检查精度终止条件
+        best_val = np.min(fitness)
+        iteration_log.append(best_val)
+        if best_val <= tol:
+            print(f"Converged at generation {gen} with precision {best_val:.6e}")
+            break
+
+        # 基于线性分布的参数自适应选择
+        p = p_max - (p_max - p_min) * (gen / max_gen)
+
+        # 种群分类
+        fitness_sorted_indices = np.argsort(fitness)
+        NPG_size = int(pop_size * 0.2)  # 优势种群固定为前20%
+        NPG_indices = fitness_sorted_indices[:NPG_size]  # 优势种群
+        NPB_indices = fitness_sorted_indices[NPG_size:]  # 劣势种群
+
+        for i in range(pop_size):
+            # 根据种群分类和停滞状态调整控制参数
+            if i in NPG_indices:
+                # 优势种群：使用 SHADE 的参数更新方式
+                hist_sample = np.random.randint(0, H)
+                F = np.clip(np.random.standard_cauchy() * 0.1 + F_hist[hist_sample], 0, 1)
+                CR = np.clip(np.random.normal(CR_hist[hist_sample], 0.1), 0, 1)
+            elif st_count[i] >= st_max:
+                # 停滞个体：重新生成控制参数
+                F = F_min + np.random.rand() * (F_max - F_min)
+                CR = CR_min + np.random.rand() * (CR_max - CR_min)
+                st_count[i] = 0  # 重置停滞计数器
+            else:
+                valid_indices = [idx % H for idx in NPG_indices]
+                F_elite = np.mean([F_hist[idx] for idx in valid_indices])
+                CR_elite = np.mean([CR_hist[idx] for idx in valid_indices])
+                F = F_min + np.random.rand() * (F_elite - F_min)
+                CR = CR_min + np.random.rand() * (CR_elite - CR_min)
+
+            F_values.append(F)
+            CR_values.append(CR)
+
+            # 根据种群分类选择变异策略
+            if i in NPG_indices:
+                # 优势种群：使用 current-to-pbest 策略
+                pbest_size = max(1, int(p * NPG_size))
+                pbest_indices = np.argsort(fitness)[:pbest_size]
+                pbest_idx = np.random.choice(pbest_indices)
+                pbest = pop[pbest_idx]
+                mutant = de_current_to_pbest_1(pop, F, i, pbest)
+            else:
+                # 劣势种群：根据种群多样性动态选择变异策略
+                mutant = select_mutation_strategy(pop, fitness, i, F)
+
+            # 二项交叉
+            trial = np.array([mutant[j] if np.random.rand() < CR else pop[i][j] for j in range(dim)])
+            trial = np.clip(trial, [b[0] for b in bounds], [b[1] for b in bounds])
+            trial_fitness = func(trial)
+
+            # 贪心选择
+            if trial_fitness < fitness[i]:
+                new_pop.append(trial)
+                fitness[i] = trial_fitness
+                archive.append(pop[i])
+                S_F.append(F)
+                S_CR.append(CR)
+                st_count[i] = 0  # 重置停滞计数器
+            else:
+                new_pop.append(pop[i])
+                st_count[i] += 1  # 增加停滞计数器
+
+        # 更新历史记忆
+        if S_F and S_CR:
+            F_hist[hist_idx] = np.mean(S_F) if np.mean(S_F) > 0 else F_hist[hist_idx]
+            CR_hist[hist_idx] = np.mean(S_CR) if np.mean(S_CR) > 0 else CR_hist[hist_idx]
+            hist_idx = (hist_idx + 1) % H
+
+        # 更新种群
+        pop = np.array(new_pop)
+
+        # 每 0.1 * max_gen 次迭代对精英个体使用 L-BFGS-B 局部优化（并行化）
+        if gen % int(0.2 * max_gen) == 0 and gen > 0:
+            elite_size = max(1, int(pop_size * 0.1))  # 前10%的精英个体
+            elite_indices = np.argsort(fitness)[:elite_size]
+
+            # 并行化局部优化
+            def local_optimize(idx):
+                result = minimize(func, pop[idx], method='L-BFGS-B', bounds=bounds, options={'maxiter': 100})
+                return idx, result.x, result.fun
+
+            results = Parallel(n_jobs=-1)(delayed(local_optimize)(idx) for idx in elite_indices)
+
+            # 更新精英个体（仅当新解适应度更低时）
+            for idx, x_opt, f_opt in results:
+                if f_opt < fitness[idx]:  # 仅当新解适应度更低时才更新
+                    pop[idx] = x_opt
+                    fitness[idx] = f_opt
+
+        print(f"当前迭代次数{gen + 1}, 迭代精度{np.min(fitness)}")
+
+    return pop[np.argmin(fitness)], np.min(fitness), iteration_log
+
+def visualize_fitness():
     # 绘制目标函数和均方误差的收敛曲线
     plt.figure(figsize=(15, 8))
     plt.xlabel("Iteration")
-    plt.ylabel("Function Convergence")
-    plt.title("Mean and Objective Error Convergence")
-    plt.plot(objective_values, label='Objective Value (Error)', color='blue')
-    plt.plot(mse_values, label='Mean Value (Error)', color='blue')
+    plt.ylabel("Objective_Fitness")
+    plt.title("Objective Fitness Across Iterations")
+    plt.plot(fitness_history, label='Objective_fitness', color='red')
+    plt.legend()
     plt.grid(True)
     plt.show()
 
-# 局部优化回调函数
-def callback(xk):
-    current_value = objective(xk)
-    objective_values.append(current_value)
-    if len(objective_values) > 1:
-        change = np.abs(objective_values[-1] - objective_values[-2])
-        print(f"迭代次数 {len(objective_values) - 1}: 变化 = {change}, 精度 = {objective_values[-1]:.4f}")
+# 设置变量边界
+bounds = np.array([(2.0, 2.0)] + [(0, 2.0)] * 19 + [(0, 0.1)] * 19)
 
+# 求得理想最终浓度
+target_p = simulate_normal_distribution(mu=10.5, sigma=6, total_concentration=1.0, x_values=np.arange(1, 21), scale_factor=10.0)
+x_values = [f'P{i}' for i in range(1, 21)]  # 定义图像横坐标
+print("理想最终浓度", {f'P{i}': c for i, c in enumerate(target_p, start=1)})
 
-# 假设初始浓度分布
-initial_p = np.zeros(11)
-initial_p[0] = 1.0  # 初始浓度 P0 = 10
+# 运行差分进化算法
+best_solution, best_fitness, fitness_history = DPADE(objective_global, bounds, pop_size=200, max_gen=2000, hist_size=100, tol=1e-6)
+print("全局优化得到的系数k:", {f'k{i}': c for i, c in enumerate(best_solution, start=0)})
+print("全局优化的最终精度:", best_fitness)
 
-# 理想最终浓度
-mu = 5.5
-sigma = 5
-scale_factor = 1
-concentrations = simulate_normal_distribution(mu, sigma, total_concentration=1.0, scale_factor=scale_factor)
-x_values = [f'P{i}' for i in range(1, 11)]
-print("理想最终浓度:", {f"P{i}": c for i, c in enumerate(concentrations, start=1)})
+best_solution = minimize(objective_global, best_solution, method='L-BFGS-B', bounds=bounds, tol=1e-8, options={'maxiter':1000})
+optimal_k = best_solution.x
+print("最终的系数k:", {f'k{i}': c for i, c in enumerate(optimal_k[:10], start=0)})
+print("最终的系数k_inv:", {f'k{i}_inv': c for i, c in enumerate(optimal_k[10:], start=1)})
+print("最终精度:", best_solution.fun)
 
-# 定义约束
-bounds = [(0.5, 10)] + [(0.01, 10)] * 9  # 对k0做出最小化限制，防止其过小
-
-# 定义初始猜测
-initial_guess = np.array([0.5, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5])  # 替换为你的实际初始猜测值
-population_size = 20  # 假设种群规模为15
-
-# 生成初始化种群，将初始猜测值包含在内
-init_population = [initial_guess] + [np.random.rand(len(bounds)) for _ in range(population_size - 1)]
-
-# 使用差分进化算法来求解 k
-print("开始全局优化")
-objective_values.clear()
-mse_values.clear()
-
-result = differential_evolution(objective, bounds, strategy='rand1bin', mutation=mutation_param[0], recombination=recombination_param[0],
-                                maxiter=1000, popsize=20, tol=1e-6, seed=42, init=np.array(init_population), callback=de_callback)
-visualize_convergence()
-
-# 优化后的 k 值
-optimal_k = result.x
-final_precision = result.fun
-
-print("全局优化的反应系数K是:", {f"k{i}:": c for i, c in enumerate(optimal_k, start=0)})
-print("全局优化的精度:", final_precision)
-
-print("开始梯度优化")
-
-objective_values.clear()
-mse_values.clear()
-
-result_final = minimize(objective, optimal_k, method='L-BFGS-B', bounds=bounds, callback=callback, tol=1e-8)
-optimal_k = result_final.x
-final_precision = result_final.fun
-
-print("反应系数K是:", {f"k{i}:": c for i, c in enumerate(optimal_k, start=0)})
-print("最终优化精度:", final_precision)
-
-visualize_convergence()
-
-t = np.linspace(0, 200, 1000)
+# 使用得到的系数求解
+initial_p = [10.0] + [0] * 20
+t = np.linspace(0, 1000, 1000)
 sol = odeint(equations, initial_p, t, args=(optimal_k,))
+
+visualize_fitness()
 
 # 绘制理想稳态浓度曲线
 plt.figure(figsize=(15, 8))
@@ -185,7 +247,7 @@ plt.ylabel("P-Concentrations")
 plt.title("Ideal Concentrations and Actual Concentrations")
 plt.xticks(range(len(x_values)), x_values, rotation=90)
 final_concentrations = sol[-1, 1:]
-plt.plot(range(len(x_values)), concentrations, label = 'Ideal Concentrations', marker='o', linestyle='-', color='blue')
+plt.plot(range(len(x_values)), target_p, label = 'Ideal Concentrations', marker='o', linestyle='-', color='blue')
 plt.plot(range(len(x_values)), final_concentrations, label = 'Actual Concentrations', marker='o', linestyle='-', color='red')
 plt.grid(True)
 plt.show()
@@ -201,33 +263,33 @@ plt.ylabel('Concentration')
 plt.title('P0-P10 Concentration over Time')
 plt.grid(True)
 plt.show()
-#
-# plt.figure(figsize=(15, 8))
-# for i in range(11, 21):
-#     plt.plot(t, sol[:, i], label=f'p{i}')
-# plt.legend()
-# plt.xlabel('Time')
-# plt.ylabel('Concentration')
-# plt.title('P11-P20 Concentration over Time')
-# plt.grid(True)
-# plt.show()
-#
-# plt.figure(figsize=(15, 8))
-# for i in range(21, 31):
-#     plt.plot(t, sol[:, i], label=f'p{i}')
-# plt.legend()
-# plt.xlabel('Time')
-# plt.ylabel('Concentration')
-# plt.title('P21-P30 Concentration over Time')
-# plt.grid(True)
-# plt.show()
-#
-# plt.figure(figsize=(15, 8))
-# for i in range(31, 41):
-#     plt.plot(t, sol[:, i], label=f'p{i}')
-# plt.legend()
-# plt.xlabel('Time')
-# plt.ylabel('Concentration')
-# plt.title('P31-P40 Concentration over Time')
-# plt.grid(True)
-# plt.show()
+
+plt.figure(figsize=(15, 8))
+for i in range(11, 21):
+    plt.plot(t, sol[:, i], label=f'p{i}')
+plt.legend()
+plt.xlabel('Time')
+plt.ylabel('Concentration')
+plt.title('P11-P20 Concentration over Time')
+plt.grid(True)
+plt.show()
+
+plt.figure(figsize=(15, 8))
+for i in range(21, 31):
+    plt.plot(t, sol[:, i], label=f'p{i}')
+plt.legend()
+plt.xlabel('Time')
+plt.ylabel('Concentration')
+plt.title('P21-P30 Concentration over Time')
+plt.grid(True)
+plt.show()
+
+plt.figure(figsize=(15, 8))
+for i in range(31, 41):
+    plt.plot(t, sol[:, i], label=f'p{i}')
+plt.legend()
+plt.xlabel('Time')
+plt.ylabel('Concentration')
+plt.title('P31-P40 Concentration over Time')
+plt.grid(True)
+plt.show()

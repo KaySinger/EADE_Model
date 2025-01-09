@@ -1,0 +1,97 @@
+import numpy as np
+from scipy.optimize import minimize
+from scipy.integrate import odeint
+from matplotlib import pyplot as plt
+
+# 正态分布模拟，得到的结果用于物质稳态浓度
+def simulate_normal_distribution(mu, sigma, total_concentration, x_values, scale_factor):
+    concentrations = np.exp(-0.5 * ((x_values - mu) / sigma) ** 2) / (sigma * np.sqrt(2 * np.pi))
+    concentrations /= sum(concentrations)
+    concentrations *= scale_factor
+    return concentrations
+
+# 定义非线性微分方程组
+def equations_1(p, t, k):
+    dpdt = np.zeros_like(p)
+    dpdt[0] = - k[0] * p[0]
+    dpdt[1] = k[0] * p[0] - k[1] * p[1] ** 2
+    for i in range(2, 30):
+        dpdt[i] = k[i - 1] * p[i - 1] ** 2 - k[i] * p[i] ** 2
+    dpdt[30] = k[29] * p[29] ** 2
+    return dpdt
+
+# 求得理想最终浓度
+target_p = simulate_normal_distribution(mu=15.5, sigma=6, total_concentration=1.0, x_values=np.arange(1, 31), scale_factor=10.0)
+x_values = [f'P{i}' for i in range(1, 31)]  # 定义图像横坐标
+print("理想最终浓度", {f'P{i}': c for i, c in enumerate(target_p, start=1)})
+
+best_solution = {'k0': 2.0, 'k1': 9.825244292822596, 'k2': 0.8503415212609342, 'k3': 3.3216504279382835,
+                 'k4': 0.009962887683455518, 'k5': 0.013645823213038706, 'k6': 0.011059593447980232,
+                 'k7': 0.010773205481664043, 'k8': 0.010325360607240281, 'k9': 0.011258250260798026,
+                 'k10': 0.008310738059146294, 'k11': 0.008443524499610283, 'k12': 0.009072642912653948,
+                 'k13': 0.008386889117749203, 'k14': 0.009365275587989542, 'k15': 0.010338261429751921,
+                 'k16': 0.011192071412421074, 'k17': 0.013527679832290878, 'k18': 0.018574968844816728,
+                 'k19': 0.02225655909530628, 'k20': 0.02819445954763219, 'k21': 0.04018131558472931,
+                 'k22': 0.0474626269526003, 'k23': 0.07738608445228103, 'k24': 0.13587819328868964,
+                 'k25': 0.1769976097331164, 'k26': 0.35880574432026224, 'k27': 0.8787766985077006,
+                 'k28': 0.5923819599927869, 'k29': 3.0443920129580446}
+best_solution = list(best_solution.values())
+
+# 使用得到的系数求解
+initial_p = [10.0] + [0] * 30
+t = np.linspace(0, 1000, 1000)
+sol = odeint(equations_1, initial_p, t, args=(best_solution,))
+
+# 绘制理想稳态浓度曲线
+plt.figure(figsize=(15, 8))
+plt.xlabel("P-Species")
+plt.ylabel("P-Concentrations")
+plt.title("Ideal Concentrations and Actual Concentrations")
+plt.xticks(range(len(x_values)), x_values, rotation=90)
+final_concentrations = sol[-1, 1:]
+plt.plot(range(len(x_values)), target_p, label = 'Ideal Concentrations', marker='o', linestyle='-', color='blue')
+plt.plot(range(len(x_values)), final_concentrations, label = 'Actual Concentrations', marker='o', linestyle='-', color='red')
+plt.grid(True)
+plt.show()
+
+# 绘图函数
+plt.figure(figsize=(15, 8))
+plt.plot(t, sol[:, 0], label='p0')
+for i in range(1, 11):
+    plt.plot(t, sol[:, i], label=f'p{i}')
+plt.legend()
+plt.xlabel('Time')
+plt.ylabel('Concentration')
+plt.title('P0-P10 Concentration over Time')
+plt.grid(True)
+plt.show()
+
+plt.figure(figsize=(15, 8))
+for i in range(11, 21):
+    plt.plot(t, sol[:, i], label=f'p{i}')
+plt.legend()
+plt.xlabel('Time')
+plt.ylabel('Concentration')
+plt.title('P11-P20 Concentration over Time')
+plt.grid(True)
+plt.show()
+
+plt.figure(figsize=(15, 8))
+for i in range(21, 31):
+    plt.plot(t, sol[:, i], label=f'p{i}')
+plt.legend()
+plt.xlabel('Time')
+plt.ylabel('Concentration')
+plt.title('P21-P30 Concentration over Time')
+plt.grid(True)
+plt.show()
+
+# plt.figure(figsize=(15, 8))
+# for i in range(31, 41):
+#     plt.plot(t, sol[:, i], label=f'p{i}')
+# plt.legend()
+# plt.xlabel('Time')
+# plt.ylabel('Concentration')
+# plt.title('P31-P40 Concentration over Time')
+# plt.grid(True)
+# plt.show()
