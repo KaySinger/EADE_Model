@@ -16,20 +16,20 @@ def equations(p, t, k):
     dpdt = np.zeros_like(p)
     dpdt[0] = - k[0] * p[0]
     dpdt[1] = k[0] * p[0] - k[1] * (p[1]**2)
-    for i in range(2, 20):
+    for i in range(2, 30):
         dpdt[i] = k[i-1] * (p[i-1]**2) - k[i] * (p[i]**2)
-    dpdt[20] = k[19] * (p[19]**2)
+    dpdt[30] = k[29] * (p[29]**2)
     return dpdt
 
 # 定义目标函数
 def objective_global(k):
-    initial_p = [10.0] + [0] * 20
+    initial_p = [10.0] + [0] * 30
     t = np.linspace(0, 1000, 1000)
     # 求解微分方程
     sol = odeint(equations, initial_p, t, args=(k,))
-    final_p = sol[-1, 1:] # 取最终浓度
+    final_p = sol[-1, :] # 取最终浓度
     # 理想最终浓度
-    ideal_p = list(target_p)
+    ideal_p = [0] + list(target_p)
     # 计算误差
     sum_error = np.sum((final_p - ideal_p)**2)
 
@@ -38,11 +38,10 @@ def objective_global(k):
 
 def local_search(func, individual, bounds):
     """局部搜索函数，使用 L-BFGS-B 方法对个体进行优化"""
-    result = minimize(func, individual, method='L-BFGS-B', bounds=bounds, options={'maxiter': 50})
+    result = minimize(func, individual, method='L-BFGS-B', bounds=bounds, options={'maxiter': 10})
     return result.x, result.fun
 
-
-def shade(func, bounds, pop_size=None, max_gen=None, hist_size=100, tol=1e-6, st_threshold=20):
+def DPADE(func, bounds, pop_size=None, max_gen=None, hist_size=300, tol=1e-6):
     dim = len(bounds)
     archive = []
     H = hist_size
@@ -50,23 +49,19 @@ def shade(func, bounds, pop_size=None, max_gen=None, hist_size=100, tol=1e-6, st
     hist_idx = 0
     iteration_log = []
 
-    # 参数 p 的范围
-    p_max = 0.2
-    p_min = 0.05
+    # 设置参数p
+    p_max, p_min = 0.15, 0.01
 
     # 初始化种群
     pop = np.random.uniform(low=[b[0] for b in bounds], high=[b[1] for b in bounds], size=(pop_size, dim))
     fitness = np.apply_along_axis(func, 1, pop)
-
-    # 停滞计数器
-    st_count = np.zeros(pop_size)
 
     for gen in range(max_gen):
         F_values, CR_values = [], []
         S_F, S_CR = [], []
         new_pop = []
 
-        # 自适应参数 p：线性下降
+        # 参数p非线性下降
         p = p_min + 0.5 * (p_max - p_min) * (1 + np.cos(gen * np.pi / max_gen))
 
         # 检查精度终止条件
@@ -85,7 +80,7 @@ def shade(func, bounds, pop_size=None, max_gen=None, hist_size=100, tol=1e-6, st
             CR_values.append(CR)
 
             # current-to-pbest/1 变异策略
-            p_best_size = max(1, int(pop_size * p))
+            p_best_size = int(pop_size * 0.1)
             p_best_indices = np.argsort(fitness)[:p_best_size]
             p_best_idx = np.random.choice(p_best_indices)
             p_best = pop[p_best_idx]
@@ -104,10 +99,8 @@ def shade(func, bounds, pop_size=None, max_gen=None, hist_size=100, tol=1e-6, st
                 archive.append(pop[i])
                 S_F.append(F)
                 S_CR.append(CR)
-                st_count[i] = 0  # 重置停滞计数器
             else:
                 new_pop.append(pop[i])
-                st_count[i] += 1  # 增加停滞计数器
 
         # 更新种群和外部存档
         pop = np.array(new_pop)
@@ -122,8 +115,8 @@ def shade(func, bounds, pop_size=None, max_gen=None, hist_size=100, tol=1e-6, st
             CR_hist[hist_idx] = np.sum(weights * np.array(S_CR))
             hist_idx = (hist_idx + 1) % H
 
-        # 局部搜索策略（并行化）
-        if gen % 100 == 0 and gen >= (max_gen / 4):
+        # 停滞机制：对停滞次数达到阈值的个体进行局部优化（并行化）
+        if best_val < 0.1 and gen % 100 == 0:
             elite_size = max(1, int(pop_size * 0.1))  # 前10%的精英个体
             elite_indices = np.argsort(fitness)[:elite_size]
 
@@ -134,16 +127,7 @@ def shade(func, bounds, pop_size=None, max_gen=None, hist_size=100, tol=1e-6, st
                     pop[idx] = x_opt
                     fitness[idx] = f_opt
 
-        # # 停滞机制：对停滞次数达到阈值的个体进行局部优化（并行化）
-        # stagnant_indices = np.where(st_count >= st_threshold)[0]
-        # results = Parallel(n_jobs=-1)(delayed(local_search)(func, pop[idx], bounds) for idx in stagnant_indices)
-        # for idx, (x_opt, f_opt) in zip(stagnant_indices, results):
-        #     if f_opt < fitness[idx]:  # 仅当新解适应度更好时才更新
-        #         pop[idx] = x_opt
-        #         fitness[idx] = f_opt
-        #         st_count[idx] = 0  # 重置停滞计数器
-
-        print(f"当前迭代次数 {gen + 1}, 迭代精度 {np.min(fitness)}")
+        print(f"当前迭代次数{gen + 1}, 迭代精度{best_val}")
 
     best_idx = np.argmin(fitness)
     return pop[best_idx], fitness[best_idx], iteration_log
@@ -160,15 +144,15 @@ def visualize_fitness():
     plt.show()
 
 # 设置变量边界
-bounds = np.array([(2.0, 2.0)] + [(0.001, 10.0)] * 19)
+bounds = np.array([(2.0, 2.0)] + [(0.001, 10.0)] * 29)
 
 # 求得理想最终浓度
-target_p = simulate_normal_distribution(mu=10.5, sigma=6, total_concentration=1.0, x_values=np.arange(1, 21), scale_factor=10.0)
-x_values = [f'P{i}' for i in range(1, 21)]  # 定义图像横坐标
+target_p = simulate_normal_distribution(mu=15.5, sigma=6, total_concentration=1.0, x_values=np.arange(1, 31), scale_factor=10.0)
+x_values = [f'P{i}' for i in range(1, 31)]  # 定义图像横坐标
 print("理想最终浓度", {f'P{i}': c for i, c in enumerate(target_p, start=1)})
 
 # 运行差分进化算法
-best_solution, best_fitness, fitness_history = shade(objective_global, bounds=bounds, pop_size=200, max_gen=2000, hist_size=100, tol=1e-6, st_threshold=20)
+best_solution, best_fitness, fitness_history = DPADE(objective_global, bounds=bounds, pop_size=300, max_gen=3000, tol=1e-6)
 print("全局优化得到的系数k:", {f'k{i}': c for i, c in enumerate(best_solution, start=0)})
 print("最终精度:", best_fitness)
 
@@ -185,7 +169,7 @@ visualize_fitness()
 # print("最终优化精度:", final_precision)
 
 # 使用得到的系数求解
-initial_p = [10.0] + [0] * 20
+initial_p = [10.0] + [0] * 30
 t = np.linspace(0, 1000, 1000)
 sol = odeint(equations, initial_p, t, args=(best_solution,))
 
