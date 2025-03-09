@@ -17,15 +17,15 @@ def equations(p, t, k_values):
     k = k_values[:20]
     k_inv = k_values[20:]
     dpdt[0] = - k[0] * p[0]
-    dpdt[1] = k[0] * p[0] + k_inv[0] * p[2] - k[1] * p[1] ** 2
+    dpdt[1] = k[0] * p[0] + k_inv[0] * p[2] - k[1] * (p[1] ** 2)
     for i in range(2, 20):
-        dpdt[i] = k[i - 1] * p[i - 1] ** 2 + k_inv[i - 1] * p[i + 1] - k_inv[i - 2] * p[i] - k[i] * p[i] ** 2
-    dpdt[20] = k[19] * p[19] ** 2 - k_inv[18] * p[20]
+        dpdt[i] = k[i - 1] * (p[i - 1] ** 2) + k_inv[i - 1] * p[i + 1] - k_inv[i - 2] * p[i] - (k[i] * p[i] ** 2)
+    dpdt[20] = (k[19] * p[19] ** 2) - k_inv[18] * p[20]
     return dpdt
 
 # 定义目标函数
 def objective_global(k):
-    initial_p = [10.0] + [0] * 20
+    initial_p = [10.0] + [0] * 10
     t = np.linspace(0, 1000, 1000)
     sol = odeint(equations, initial_p, t, args=(k,))
 
@@ -43,42 +43,12 @@ def objective_global(k):
 
     return final_error
 
-def rand1bin(pop, F, i):
-    r1, r2, r3 = np.random.choice(len(pop), 3, replace=False)
-    return pop[r1] + F * (pop[r2] - pop[r3])
+def local_search(func, individual, bounds):
+    """局部搜索函数，使用 L-BFGS-B 方法对个体进行优化"""
+    result = minimize(func, individual, method='L-BFGS-B', bounds=bounds, options={'maxiter': 50})
+    return result.x, result.fun
 
-def rand2bin(pop, F, i):
-    r1, r2, r3, r4 = np.random.choice(len(pop), 4, replace=False)
-    return pop[r1] + F * (pop[r2] - pop[r3]) + F * (pop[r4] - pop[r1])
-
-
-# 定义current-to-pbest变异策略
-def de_current_to_pbest_1(X, F, i, pbest):
-    NP, D = X.shape
-    r1, r2 = np.random.choice(NP, 2, replace=False)
-    return X[i] + F * (pbest - X[i]) + F * (X[r1] - X[r2])
-
-def calculate_diversity(fitness):
-    """
-    计算种群多样性（适应度的标准差）
-    """
-    return np.std(fitness)
-
-def select_mutation_strategy(pop, fitness, i, F, diversity_threshold=0.1):
-    """
-    根据种群多样性动态选择变异策略
-    """
-    diversity = calculate_diversity(fitness)
-    if diversity < diversity_threshold:
-        # 多样性低，使用 rand2bin
-        return rand2bin(pop, F, i)
-    else:
-        # 多样性高，使用 rand1bin
-        return rand1bin(pop, F, i)
-
-
-def DPADE(func, bounds, pop_size=None, max_gen=None, hist_size=100, tol=1e-6):
-
+def DPADE(func, bounds, pop_size=None, max_gen=None, hist_size=200, tol=1e-6):
     dim = len(bounds)
     archive = []
     H = hist_size
@@ -86,24 +56,20 @@ def DPADE(func, bounds, pop_size=None, max_gen=None, hist_size=100, tol=1e-6):
     hist_idx = 0
     iteration_log = []
 
+    # 设置参数p
+    p_max, p_min = 0.15, 0.01
+
     # 初始化种群
     pop = np.random.uniform(low=[b[0] for b in bounds], high=[b[1] for b in bounds], size=(pop_size, dim))
     fitness = np.apply_along_axis(func, 1, pop)
-
-    # 控制参数自适应机制
-    F_min, F_max = 0.4, 0.8  # 缩放因子 F 的范围
-    CR_min, CR_max = 0.5, 0.9  # 交叉因子 CR 的范围
-    st_max = 20  # 停滞代数的上限
-    st_count = np.zeros(pop_size)  # 记录每个个体的停滞代数
-
-    # 固定参数 p
-    p_max = 0.1
-    p_min = 0.02
 
     for gen in range(max_gen):
         F_values, CR_values = [], []
         S_F, S_CR = [], []
         new_pop = []
+
+        # 参数p非线性下降
+        p = p_min + 0.5 * (p_max - p_min) * (1 + np.cos(gen * np.pi / max_gen))
 
         # 检查精度终止条件
         best_val = np.min(fitness)
@@ -112,52 +78,25 @@ def DPADE(func, bounds, pop_size=None, max_gen=None, hist_size=100, tol=1e-6):
             print(f"Converged at generation {gen} with precision {best_val:.6e}")
             break
 
-        # 基于线性分布的参数自适应选择
-        p = p_max - (p_max - p_min) * (gen / max_gen)
-
-        # 种群分类
-        fitness_sorted_indices = np.argsort(fitness)
-        NPG_size = int(pop_size * 0.2)  # 优势种群固定为前20%
-        NPG_indices = fitness_sorted_indices[:NPG_size]  # 优势种群
-        NPB_indices = fitness_sorted_indices[NPG_size:]  # 劣势种群
-
         for i in range(pop_size):
-            # 根据种群分类和停滞状态调整控制参数
-            if i in NPG_indices:
-                # 优势种群：使用 SHADE 的参数更新方式
-                hist_sample = np.random.randint(0, H)
-                F = np.clip(np.random.standard_cauchy() * 0.1 + F_hist[hist_sample], 0, 1)
-                CR = np.clip(np.random.normal(CR_hist[hist_sample], 0.1), 0, 1)
-            elif st_count[i] >= st_max:
-                # 停滞个体：重新生成控制参数
-                F = F_min + np.random.rand() * (F_max - F_min)
-                CR = CR_min + np.random.rand() * (CR_max - CR_min)
-                st_count[i] = 0  # 重置停滞计数器
-            else:
-                valid_indices = [idx % H for idx in NPG_indices]
-                F_elite = np.mean([F_hist[idx] for idx in valid_indices])
-                CR_elite = np.mean([CR_hist[idx] for idx in valid_indices])
-                F = F_min + np.random.rand() * (F_elite - F_min)
-                CR = CR_min + np.random.rand() * (CR_elite - CR_min)
-
+            # 从成功历史记录中采样 F 和 CR
+            hist_sample = np.random.randint(0, H)
+            F = np.clip(np.random.standard_cauchy() * 0.1 + F_hist[hist_sample], 0, 1)
+            CR = np.clip(np.random.normal(CR_hist[hist_sample], 0.1), 0, 1)
             F_values.append(F)
             CR_values.append(CR)
 
-            # 根据种群分类选择变异策略
-            if i in NPG_indices:
-                # 优势种群：使用 current-to-pbest 策略
-                pbest_size = max(1, int(p * NPG_size))
-                pbest_indices = np.argsort(fitness)[:pbest_size]
-                pbest_idx = np.random.choice(pbest_indices)
-                pbest = pop[pbest_idx]
-                mutant = de_current_to_pbest_1(pop, F, i, pbest)
-            else:
-                # 劣势种群：根据种群多样性动态选择变异策略
-                mutant = select_mutation_strategy(pop, fitness, i, F)
+            # current-to-pbest/1 变异策略
+            p_best_size = int(pop_size * p)
+            p_best_indices = np.argsort(fitness)[:p_best_size]
+            p_best_idx = np.random.choice(p_best_indices)
+            p_best = pop[p_best_idx]
+            a, b = pop[np.random.choice(pop_size, 2, replace=False)]
+            mutant = pop[i] + F * (p_best - pop[i]) + F * (a - b)
+            mutant = np.clip(mutant, [b[0] for b in bounds], [b[1] for b in bounds])
 
             # 二项交叉
             trial = np.array([mutant[j] if np.random.rand() < CR else pop[i][j] for j in range(dim)])
-            trial = np.clip(trial, [b[0] for b in bounds], [b[1] for b in bounds])
             trial_fitness = func(trial)
 
             # 贪心选择
@@ -167,41 +106,38 @@ def DPADE(func, bounds, pop_size=None, max_gen=None, hist_size=100, tol=1e-6):
                 archive.append(pop[i])
                 S_F.append(F)
                 S_CR.append(CR)
-                st_count[i] = 0  # 重置停滞计数器
             else:
                 new_pop.append(pop[i])
-                st_count[i] += 1  # 增加停滞计数器
 
-        # 更新历史记忆
+        # 更新种群和外部存档
+        pop = np.array(new_pop)
+        if len(archive) > pop_size:
+            archive.pop(np.random.randint(0, len(archive)))
+
+        # 更新成功历史记录
         if S_F and S_CR:
-            F_hist[hist_idx] = np.mean(S_F) if np.mean(S_F) > 0 else F_hist[hist_idx]
-            CR_hist[hist_idx] = np.mean(S_CR) if np.mean(S_CR) > 0 else CR_hist[hist_idx]
+            weights = np.array([abs(fitness[i] - trial_fitness) for i in range(len(S_F))])
+            weights /= np.sum(weights)
+            F_hist[hist_idx] = np.sum(weights * np.array(S_F))
+            CR_hist[hist_idx] = np.sum(weights * np.array(S_CR))
             hist_idx = (hist_idx + 1) % H
 
-        # 更新种群
-        pop = np.array(new_pop)
-
-        # 每 0.1 * max_gen 次迭代对精英个体使用 L-BFGS-B 局部优化（并行化）
-        if gen % int(0.2 * max_gen) == 0 and gen > 0:
+        # 停滞机制：对停滞次数达到阈值的个体进行局部优化（并行化）
+        if (best_val < 0.1 or gen >= max_gen / 2) and gen % 100 == 0:
             elite_size = max(1, int(pop_size * 0.1))  # 前10%的精英个体
             elite_indices = np.argsort(fitness)[:elite_size]
 
-            # 并行化局部优化
-            def local_optimize(idx):
-                result = minimize(func, pop[idx], method='L-BFGS-B', bounds=bounds, options={'maxiter': 100})
-                return idx, result.x, result.fun
-
-            results = Parallel(n_jobs=-1)(delayed(local_optimize)(idx) for idx in elite_indices)
-
-            # 更新精英个体（仅当新解适应度更低时）
-            for idx, x_opt, f_opt in results:
-                if f_opt < fitness[idx]:  # 仅当新解适应度更低时才更新
+            # 对精英个体进行局部搜索（并行化）
+            results = Parallel(n_jobs=-1)(delayed(local_search)(func, pop[idx], bounds) for idx in elite_indices)
+            for idx, (x_opt, f_opt) in zip(elite_indices, results):
+                if f_opt < fitness[idx]:  # 仅当新解适应度更好时才更新
                     pop[idx] = x_opt
                     fitness[idx] = f_opt
 
-        print(f"当前迭代次数{gen + 1}, 迭代精度{np.min(fitness)}")
+        print(f"当前迭代次数{gen + 1}, 迭代精度{best_val}")
 
-    return pop[np.argmin(fitness)], np.min(fitness), iteration_log
+    best_idx = np.argmin(fitness)
+    return pop[best_idx], fitness[best_idx], iteration_log
 
 def visualize_fitness():
     # 绘制目标函数和均方误差的收敛曲线
@@ -215,15 +151,15 @@ def visualize_fitness():
     plt.show()
 
 # 设置变量边界
-bounds = np.array([(2.0, 2.0)] + [(0, 2.0)] * 19 + [(0, 0.1)] * 19)
+bounds = np.array([(2.0, 2.0)] + [(0, 5.0)] * 39 + [(0, 1)] * 39)
 
 # 求得理想最终浓度
-target_p = simulate_normal_distribution(mu=10.5, sigma=6, total_concentration=1.0, x_values=np.arange(1, 21), scale_factor=10.0)
-x_values = [f'P{i}' for i in range(1, 21)]  # 定义图像横坐标
+target_p = simulate_normal_distribution(mu=20.5, sigma=8, total_concentration=1.0, x_values=np.arange(1, 41), scale_factor=10.0)
+x_values = [f'P{i}' for i in range(1, 41)]  # 定义图像横坐标
 print("理想最终浓度", {f'P{i}': c for i, c in enumerate(target_p, start=1)})
 
 # 运行差分进化算法
-best_solution, best_fitness, fitness_history = DPADE(objective_global, bounds, pop_size=200, max_gen=2000, hist_size=100, tol=1e-6)
+best_solution, best_fitness, fitness_history = DPADE(objective_global, bounds, pop_size=200, max_gen=4000, hist_size=200, tol=1e-6)
 print("全局优化得到的系数k:", {f'k{i}': c for i, c in enumerate(best_solution, start=0)})
 print("全局优化的最终精度:", best_fitness)
 
@@ -234,7 +170,7 @@ print("最终的系数k_inv:", {f'k{i}_inv': c for i, c in enumerate(optimal_k[1
 print("最终精度:", best_solution.fun)
 
 # 使用得到的系数求解
-initial_p = [10.0] + [0] * 20
+initial_p = [10.0] + [0] * 40
 t = np.linspace(0, 1000, 1000)
 sol = odeint(equations, initial_p, t, args=(optimal_k,))
 

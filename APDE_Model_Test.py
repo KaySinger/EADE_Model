@@ -24,28 +24,39 @@ def equations_1(p, t, k):
 # 定义非线性微分方程组
 def equations_2(p, t, k_values):
     dpdt = np.zeros_like(p)
-    k = k_values[:40]
-    k_inv = k_values[40:]
+    k = k_values[:30]
+    k_inv = k_values[30:]
     dpdt[0] = - k[0] * p[0]
     dpdt[1] = k[0] * p[0] + k_inv[0] * p[2] - k[1] * p[1] ** 2
-    for i in range(2, 40):
+    for i in range(2, 30):
         dpdt[i] = k[i - 1] * p[i - 1] ** 2 + k_inv[i - 1] * p[i + 1] - k_inv[i - 2] * p[i] - k[i] * p[i] ** 2
-    dpdt[40] = k[39] * p[39] ** 2 - k_inv[38] * p[40]
+    dpdt[30] = k[29] * p[29] ** 2 - k_inv[28] * p[30]
     return dpdt
 
 # 定义目标函数
 def objective_global(k):
-    initial_p = [10.0] + [0] * 40
+    # 正向系数递增性惩罚项
+    k_forward = k[1:30]
+    penalty = 0.0
+    # 计算所有相邻k的递减量，若k[i+1] < k[i]则施加惩罚
+    for i in range(len(k_forward) - 1):
+        if k_forward[i + 1] < k_forward[i]:
+            penalty += (k_forward[i] - k_forward[i + 1]) ** 2  # 平方惩罚项
+    penalty_weight = 1e6  # 惩罚权重（根据问题规模调整）
+    total_penalty = penalty_weight * penalty
+
+    initial_p = [10.0] + [0] * 30
     t = np.linspace(0, 1000, 1000)
     # 求解微分方程
-    sol = odeint(equations_1, initial_p, t, args=(k,))
-    final_p = sol[-1, 1:] # 取最终浓度
-    # 理想最终浓度
-    ideal_p = list(target_p)
-    # 计算误差
-    sum_error = np.sum((final_p - ideal_p)**2)
+    sol = odeint(equations_2, initial_p, t, args=(k,))
+    # 选取t>=900时的所有解（假设t=1000时有1000个点，索引900对应t=900）
+    selected_sol = sol[900:, :]
+    # 理想浓度
+    ideal_p = np.array([0] + list(target_p))
+    # 计算所有选中时间点的误差平方和
+    sum_error = np.sum((selected_sol - ideal_p) ** 2)
 
-    return sum_error
+    return sum_error + total_penalty
 
 # 定义目标函数
 def objective_local(k):
@@ -63,10 +74,10 @@ def objective_local(k):
     return mse_error
 
 
-def shade_improved(func, bounds, pop_size=None, max_gen=None, hist_size=100, tol=1e-6):
+def shade_improved(func, bounds, pop_size=None, max_gen=None, tol=1e-6):
     dim = len(bounds)
     archive = []
-    H = hist_size
+    H = pop_size
     F_hist, CR_hist = [0.5] * H, [0.5] * H
     hist_idx = 0
     iteration_log = []
@@ -81,7 +92,7 @@ def shade_improved(func, bounds, pop_size=None, max_gen=None, hist_size=100, tol
 
     # 参数 p 的范围
     p_max = 0.1
-    p_min = 0.02
+    p_min = 0.01
 
     for gen in range(max_gen):
         F_values, CR_values = [], []
@@ -96,7 +107,7 @@ def shade_improved(func, bounds, pop_size=None, max_gen=None, hist_size=100, tol
             break
 
         # 基于线性分布的参数自适应选择
-        p = p_max - (p_max - p_min) * (gen / max_gen)
+        p = p_min + 0.5 * (p_max - p_min) * (1 + np.cos(gen * np.pi / max_gen))
 
         for i in range(N_G):
             # 从成功历史记录中采样 F 和 CR
@@ -168,22 +179,23 @@ def visualize_fitness():
     plt.show()
 
 # 设置变量边界
-bounds = np.array([(2.0, 2.0)] + [(0.001, 20.0)] * 39)
+bounds = np.array([(1.0, 1.0)] + [(0, 2.0)] * 29 + [(0, 1.0)] * 29)
 
 # 求得理想最终浓度
-target_p = simulate_normal_distribution(mu=20.5, sigma=8, total_concentration=1.0, x_values=np.arange(1, 41), scale_factor=10.0)
-x_values = [f'P{i}' for i in range(1, 41)]  # 定义图像横坐标
+target_p = simulate_normal_distribution(mu=15.5, sigma=8, total_concentration=1.0, x_values=np.arange(1, 31), scale_factor=10.0)
+x_values = [f'P{i}' for i in range(1, 31)]  # 定义图像横坐标
 print("理想最终浓度", {f'P{i}': c for i, c in enumerate(target_p, start=1)})
 
 # 运行差分进化算法
-best_solution, best_fitness, fitness_history = shade_improved(objective_global, bounds, pop_size=400, max_gen=4000, hist_size=100, tol=1e-6)
-print("全局优化得到的系数k:", {f'k{i}': c for i, c in enumerate(best_solution, start=0)})
+best_solution, best_fitness, fitness_history = shade_improved(objective_global, bounds, pop_size=300, max_gen=5000, tol=1e-6)
+print("全局优化得到的系数k:", {f'k{i}': c for i, c in enumerate(best_solution[:30], start=0)})
+print("全局优化得到的系数k_inv:", {f'k{i}_inv': c for i, c in enumerate(best_solution[30:], start=1)})
 print("最终精度:", best_fitness)
 
 # 使用得到的系数求解
-initial_p = [10.0] + [0] * 40
+initial_p = [10.0] + [0] * 30
 t = np.linspace(0, 1000, 1000)
-sol = odeint(equations_1, initial_p, t, args=(best_solution,))
+sol = odeint(equations_2, initial_p, t, args=(best_solution,))
 
 visualize_fitness()
 

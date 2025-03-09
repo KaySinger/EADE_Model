@@ -16,14 +16,14 @@ def equations(p, t, k):
     dpdt = np.zeros_like(p)
     dpdt[0] = - k[0] * p[0]
     dpdt[1] = k[0] * p[0] - k[1] * (p[1]**2)
-    for i in range(2, 30):
+    for i in range(2, 40):
         dpdt[i] = k[i-1] * (p[i-1]**2) - k[i] * (p[i]**2)
-    dpdt[30] = k[29] * (p[29]**2)
+    dpdt[40] = k[39] * (p[39]**2)
     return dpdt
 
 # 定义目标函数
 def objective_global(k):
-    initial_p = [10.0] + [0] * 30
+    initial_p = [10.0] + [0] * 40
     t = np.linspace(0, 1000, 1000)
     # 求解微分方程
     sol = odeint(equations, initial_p, t, args=(k,))
@@ -38,10 +38,10 @@ def objective_global(k):
 
 def local_search(func, individual, bounds):
     """局部搜索函数，使用 L-BFGS-B 方法对个体进行优化"""
-    result = minimize(func, individual, method='L-BFGS-B', bounds=bounds, options={'maxiter': 10})
+    result = minimize(func, individual, method='L-BFGS-B', bounds=bounds, options={'maxiter': 50})
     return result.x, result.fun
 
-def DPADE(func, bounds, pop_size=None, max_gen=None, hist_size=300, tol=1e-6):
+def DPADE(func, bounds, pop_size=None, max_gen=None, hist_size=400, tol=1e-6):
     dim = len(bounds)
     archive = []
     H = hist_size
@@ -80,7 +80,7 @@ def DPADE(func, bounds, pop_size=None, max_gen=None, hist_size=300, tol=1e-6):
             CR_values.append(CR)
 
             # current-to-pbest/1 变异策略
-            p_best_size = int(pop_size * 0.1)
+            p_best_size = int(pop_size * p)
             p_best_indices = np.argsort(fitness)[:p_best_size]
             p_best_idx = np.random.choice(p_best_indices)
             p_best = pop[p_best_idx]
@@ -116,7 +116,7 @@ def DPADE(func, bounds, pop_size=None, max_gen=None, hist_size=300, tol=1e-6):
             hist_idx = (hist_idx + 1) % H
 
         # 停滞机制：对停滞次数达到阈值的个体进行局部优化（并行化）
-        if best_val < 0.1 and gen % 100 == 0:
+        if (best_val < 0.1 or gen >= max_gen / 2) and gen % 100 == 0:
             elite_size = max(1, int(pop_size * 0.1))  # 前10%的精英个体
             elite_indices = np.argsort(fitness)[:elite_size]
 
@@ -144,15 +144,15 @@ def visualize_fitness():
     plt.show()
 
 # 设置变量边界
-bounds = np.array([(2.0, 2.0)] + [(0.001, 10.0)] * 29)
+bounds = np.array([(0, 1.0)] + [(0, 5.0)] * 9)
 
 # 求得理想最终浓度
-target_p = simulate_normal_distribution(mu=15.5, sigma=6, total_concentration=1.0, x_values=np.arange(1, 31), scale_factor=10.0)
-x_values = [f'P{i}' for i in range(1, 31)]  # 定义图像横坐标
+target_p = simulate_normal_distribution(mu=5.5, sigma=6, total_concentration=1.0, x_values=np.arange(1, 11), scale_factor=10.0)
+x_values = [f'P{i}' for i in range(1, 11)]  # 定义图像横坐标
 print("理想最终浓度", {f'P{i}': c for i, c in enumerate(target_p, start=1)})
 
 # 运行差分进化算法
-best_solution, best_fitness, fitness_history = DPADE(objective_global, bounds=bounds, pop_size=300, max_gen=3000, tol=1e-6)
+best_solution, best_fitness, fitness_history = DPADE(objective_global, bounds=bounds, pop_size=50, max_gen=1000,hist_size=50, tol=1e-6)
 print("全局优化得到的系数k:", {f'k{i}': c for i, c in enumerate(best_solution, start=0)})
 print("最终精度:", best_fitness)
 
@@ -169,7 +169,7 @@ visualize_fitness()
 # print("最终优化精度:", final_precision)
 
 # 使用得到的系数求解
-initial_p = [10.0] + [0] * 30
+initial_p = [10.0] + [0] * 40
 t = np.linspace(0, 1000, 1000)
 sol = odeint(equations, initial_p, t, args=(best_solution,))
 

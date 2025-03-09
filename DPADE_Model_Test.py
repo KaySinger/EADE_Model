@@ -16,32 +16,27 @@ def equations(p, t, k):
     dpdt = np.zeros_like(p)
     dpdt[0] = - k[0] * p[0]
     dpdt[1] = k[0] * p[0] - k[1] * (p[1]**2)
-    for i in range(2, 40):
+    for i in range(2, 10):
         dpdt[i] = k[i-1] * (p[i-1]**2) - k[i] * (p[i]**2)
-    dpdt[40] = k[39] * (p[39]**2)
+    dpdt[10] = k[9] * (p[9]**2)
     return dpdt
 
 # 定义目标函数
 def objective_global(k):
-    initial_p = [10.0] + [0] * 40
-    t = np.linspace(0, 200, 1000)
+    initial_p = [10.0] + [0] * 10
+    t = np.linspace(0, 1000, 1000)
     # 求解微分方程
     sol = odeint(equations, initial_p, t, args=(k,))
-    final_p = sol[-1, :] # 取最终浓度
+    final_p = sol[-1, 1:] # 取最终浓度
     # 理想最终浓度
-    ideal_p = [0] + list(target_p)
+    ideal_p = list(target_p)
     # 计算误差
     sum_error = np.sum((final_p - ideal_p)**2)
-    mse_error = sum_error / len(final_p)
-    # 设立惩罚项，知道系数向着增大演变
-    k_f = k[1:]
-    penalty = np.sum(np.maximum(0, -np.diff(k_f)) ** 2)
-    alpha = 0.5
 
-    return sum_error + alpha * penalty
+    return sum_error
 
 # 定义差分进化算法
-def DPADE(func, bounds=None, max_iter=None, NP=200, F=0.5, CR=0.9, alpha=1.0, beta=0.5, tol=None):
+def DPADE(func, bounds=None, max_iter=None, NP=100, F=0.5, CR=0.9, alpha=1.0, beta=0.5, tol=None):
     dim = len(bounds)
     lb = [b[0] for b in bounds]
     ub = [b[1] for b in bounds]
@@ -159,34 +154,34 @@ def visualize_fitness():
     plt.show()
 
 # 设置变量边界
-bounds = np.array([(1, 2)] + [(0.01, 20)] * 39)
+bounds = np.array([(2.0, 2.0)] + [(0.001, 10)] * 9)
 
 # 求得理想最终浓度
-target_p = simulate_normal_distribution(mu=20.5, sigma=8, total_concentration=1.0, x_values=np.arange(1, 41), scale_factor=10.0)
-x_values = [f'P{i}' for i in range(1, 41)]  # 定义图像横坐标
+target_p = simulate_normal_distribution(mu=5.5, sigma=6, total_concentration=1.0, x_values=np.arange(1, 11), scale_factor=10.0)
+x_values = [f'P{i}' for i in range(1, 11)]  # 定义图像横坐标
 print("理想最终浓度", {f'P{i}': c for i, c in enumerate(target_p, start=1)})
 
 # 运行差分进化算法
-best_solution, best_fitness, fitness_history = DPADE(objective_global, bounds=bounds, max_iter=1000, NP=400, F=0.5, CR=0.9, alpha=1.0, beta=0.5, tol=1e-6)
+best_solution, best_fitness, fitness_history = DPADE(objective_global, bounds=bounds, max_iter=1000, NP=100, F=0.5, CR=0.9, alpha=1.0, beta=0.5, tol=1e-6)
 print("全局优化得到的系数k:", {f'k{i}': c for i, c in enumerate(best_solution, start=0)})
 print("最终精度:", best_fitness)
 
 visualize_fitness()
 
-# 梯度优化，进一步提高精度
-print("开始梯度优化")
-
-result_final = minimize(objective_global, best_solution, method='L-BFGS-B', bounds=bounds, tol=1e-8)
-optimal_k = result_final.x
-final_precision = result_final.fun
-
-print("反应系数K是:", {f"k{i}:": c for i, c in enumerate(optimal_k, start=0)})
-print("最终优化精度:", final_precision)
+# # 梯度优化，进一步提高精度
+# print("开始梯度优化")
+#
+# result_final = minimize(objective_global, best_solution, method='L-BFGS-B', bounds=bounds, tol=1e-8)
+# optimal_k = result_final.x
+# final_precision = result_final.fun
+#
+# print("反应系数K是:", {f"k{i}:": c for i, c in enumerate(optimal_k, start=0)})
+# print("最终优化精度:", final_precision)
 
 # 使用得到的系数求解
-initial_p = [10.0] + [0] * 40
-t = np.linspace(0, 200, 1000)
-sol = odeint(equations, initial_p, t, args=(optimal_k,))
+initial_p = [10.0] + [0] * 10
+t = np.linspace(0, 1000, 1000)
+sol = odeint(equations, initial_p, t, args=(best_solution,))
 
 # 绘制理想稳态浓度曲线
 plt.figure(figsize=(15, 8))

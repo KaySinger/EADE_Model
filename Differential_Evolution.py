@@ -15,32 +15,41 @@ def simulate_normal_distribution(mu, sigma, total_concentration, x_values, scale
     return concentrations
 
 # 定义非线性微分方程组
-def equations(p, t, k):
+def equations(p, t, k_values):
     dpdt = np.zeros_like(p)
+    k = k_values[:10]
+    k_inv = k_values[10:]
     dpdt[0] = - k[0] * p[0]
-    dpdt[1] = k[0] * p[0] - k[1] * (p[1]**2)
+    dpdt[1] = k[0] * p[0] + k_inv[0] * p[2] - k[1] * p[1] ** 2
     for i in range(2, 10):
-        dpdt[i] = k[i-1] * (p[i-1]**2) - k[i] * (p[i]**2)
-    dpdt[10] = k[9] * (p[9]**2)
+        dpdt[i] = k[i - 1] * p[i - 1] ** 2 + k_inv[i - 1] * p[i + 1] - k_inv[i - 2] * p[i] - k[i] * p[i] ** 2
+    dpdt[10] = k[9] * p[9] ** 2 - k_inv[8] * p[10]
     return dpdt
 
 # 定义目标函数
 def objective_global(k):
+    # 正向系数递增性惩罚项
+    k_forward = k[1:10]
+    penalty = 0.0
+    # 计算所有相邻k的递减量，若k[i+1] < k[i]则施加惩罚
+    for i in range(len(k_forward) - 1):
+        if k_forward[i + 1] < k_forward[i]:
+            penalty += (k_forward[i] - k_forward[i + 1]) ** 2  # 平方惩罚项
+    penalty_weight = 1e6  # 惩罚权重（根据问题规模调整）
+    total_penalty = penalty_weight * penalty
+
     initial_p = [10.0] + [0] * 10
-    t = np.linspace(0, 200, 1000)
+    t = np.linspace(0, 1000, 1000)
     # 求解微分方程
     sol = odeint(equations, initial_p, t, args=(k,))
-    final_p = sol[-1, :] # 取最终浓度
-    # 理想最终浓度
-    ideal_p = [0] + list(target_p)
-    # 计算误差
-    sum_error = np.sum((final_p - ideal_p)**2)
-    mse_error = sum_error / len(final_p)
-    # 存储求得的误差
-    objective_values.append(sum_error)
-    mse_values.append(mse_error)
+    # 选取t>=900时的所有解（假设t=1000时有1000个点，索引900对应t=900）
+    selected_sol = sol[900:, :]
+    # 理想浓度
+    ideal_p = np.array([0] + list(target_p))
+    # 计算所有选中时间点的误差平方和
+    sum_error = np.sum((selected_sol - ideal_p) ** 2)
 
-    return sum_error
+    return sum_error + total_penalty
 
 # 定义目标函数
 def objective_local(k):
@@ -188,17 +197,17 @@ def visualize_fitness():
     plt.show()
 
 # 设置变量边界
-bounds = np.array([(1.0, 10)] + [(0.01, 10)] * 9)
+bounds = np.array([(0.5, 0.5)] + [(0, 1.0)] * 9 + [(0, 0.02)] * 9)
 
 # 求得理想最终浓度
-target_p = simulate_normal_distribution(mu=5.5, sigma=8, total_concentration=1.0, x_values=np.arange(1, 11), scale_factor=10.0)
+target_p = simulate_normal_distribution(mu=5.5, sigma=6, total_concentration=1.0, x_values=np.arange(1, 11), scale_factor=10.0)
 x_values = [f'P{i}' for i in range(1, 11)]  # 定义图像横坐标
 print("理想最终浓度", {f'P{i}': c for i, c in enumerate(target_p, start=1)})
 
 # 运行差分进化算法
 objective_values.clear()
 mse_values.clear()
-result = DifferentialEvolution(objective_global, bounds, mutation_factor=0.8, crossover_prob=0.9, population_size=100, seed=42)
+result = DifferentialEvolution(objective_global, bounds, mutation_factor=0.7, crossover_prob=0.8, population_size=100, seed=42)
 optimal_k, final_precision, fitness_history = result.solve(max_iter=1000, tol=1e-6)
 print("全局优化得到的系数k:", {f'k{i}': c for i, c in enumerate(optimal_k, start=0)})
 print("最终精度:", final_precision)
@@ -220,7 +229,7 @@ visualize_fitness()
 
 # 使用得到的系数求解
 initial_p = [10.0] + [0] * 10
-t = np.linspace(0, 200, 1000)
+t = np.linspace(0, 1000, 1000)
 sol = odeint(equations, initial_p, t, args=(optimal_k,))
 
 # 绘制理想稳态浓度曲线

@@ -4,44 +4,17 @@ from scipy.integrate import odeint
 from scipy.optimize import minimize, curve_fit
 import matplotlib.pyplot as plt
 
-# 记录迭代目标函数值和均方误差
-objective_values = []
-mse_values = []
-
-# 定义微分方程
-def equations(p, t, k):
+# 定义非线性微分方程组
+def equations(p, t, k_values):
     dpdt = np.zeros_like(p)
-    dpdt[0] = -k[0] * p[0]
-    dpdt[1] = k[0] * p[0] - k[1] * p[1]**2
-    for i in range(2, 40):
-        dpdt[i] = k[i-1] * p[i-1]**2 - k[i] * p[i]**2
-    dpdt[40] = k[39] * p[39]**2
+    k = k_values[:20]
+    k_inv = k_values[20:]
+    dpdt[0] = - k[0] * p[0]
+    dpdt[1] = k[0] * p[0] + k_inv[0] * p[2] - k[1] * (p[1] ** 2)
+    for i in range(2, 20):
+        dpdt[i] = k[i - 1] * (p[i - 1] ** 2) + k_inv[i - 1] * p[i + 1] - k_inv[i - 2] * p[i] - k[i] * (p[i] ** 2)
+    dpdt[20] = k[19] * (p[19] ** 2) - k_inv[18] * p[20]
     return dpdt
-
-# 定义目标函数，鼓励 k 值呈递减趋势
-def objective(k):
-    # 初始条件
-    initial_p = [10] + [0] * 40  # 初始浓度 P0 = 10
-    t = np.linspace(0, 200, 1000)
-    # 求解微分方程
-    sol = odeint(equations, initial_p, t, args=(k,))
-    final_p = sol[-1, 1:]
-    # 目标浓度分布
-    target_distribution = list(concentrations)
-    # 计算 P1 到 P40 的误差
-    error = np.sum((final_p - target_distribution) ** 2)
-
-    mse = error / len(final_p)
-    # 正则化法则
-    # penalty = np.sum(np.maximum(0, -np.diff(k))**2)
-    # alpha = 1.0
-
-    # 记录
-    objective_values.append(error)
-    mse_values.append(mse)
-
-    return error
-
 
 def plot_concentration_combined(t, sol):
     # 创建一个包含 5 行 1 列的子图布局
@@ -168,61 +141,32 @@ def plot_k_lnp_curves(pm, optimal_k):
 
 # 正态分布模拟，得到的结果用于物质稳态浓度
 def simulate_normal_distribution(mu, sigma, total_concentration, scale_factor):
-    x_values = np.arange(1, 41)
+    x_values = np.arange(1, 21)
     concentrations = np.exp(-0.5 * ((x_values - mu) / sigma) ** 2) / (sigma * np.sqrt(2 * np.pi))
     concentrations /= sum(concentrations)
     concentrations *= scale_factor
     return concentrations
 
-# 局部优化回调函数
-def callback(xk):
-    current_value = objective(xk)
-    objective_values.append(current_value)
-    if len(objective_values) > 1:
-        change = np.abs(objective_values[-1] - objective_values[-2])
-        print(f"迭代次数 {len(objective_values) - 1}: 变化 = {change}, 精度 = {objective_values[-1]}")
-
 # 假设初始浓度分布
-initial_p = np.zeros(41)
+initial_p = np.zeros(21)
 initial_p[0] = 10  # 初始浓度 P0 = 10
 
 # 理想最终浓度
-mu = 20.5
-sigma = 8
+mu = 10.5
+sigma = 6
 scale_factor = 10
 concentrations = simulate_normal_distribution(mu, sigma, total_concentration=1.0, scale_factor=scale_factor)
-x_values = [f'P{i}' for i in range(1, 41)]
+x_values = [f'P{i}' for i in range(1, 21)]
 print("理想最终浓度:", {f"P{i}": c for i, c in enumerate(concentrations, start=1)})
 
-# 定义约束
-bounds = [(0.5, 10)] + [(0.01, None)] * 39  # 对k0做出最小化限制，防止其过小
-constraints = {'type': 'ineq', 'fun': lambda k: k[1] - k[0]}
+best_solution = {'k0': 1.115564485568162, 'k1': 0.4834945458141331, 'k2': 0.3221554930125466, 'k3': 0.28157713938698875, 'k4': 0.2522645002066048, 'k5': 0.16129907117085096, 'k6': 0.14444019410384334, 'k7': 0.14818632649216418, 'k8': 0.1356496000167094, 'k9': 0.12319960174447865, 'k10': 0.11600196382458658, 'k11': 0.09489492240026193, 'k12': 0.09628400224423128, 'k13': 0.08909084921413671, 'k14': 0.11186019623192459, 'k15': 0.1142878748579884, 'k16': 0.1351133984962806, 'k17': 0.18687123891011442, 'k18': 0.17834158237802444, 'k19': 0.19454081979790092}
+k_inv = {'k1_inv': 0.07884944255869816, 'k2_inv': 0.0695160447797974, 'k3_inv': 0.07807724523254629, 'k4_inv': 0.0871300097295713, 'k5_inv': 0.0677329996018549, 'k6_inv': 0.07179053669406994, 'k7_inv': 0.08443867503527003, 'k8_inv': 0.08654127861039182, 'k9_inv': 0.08524609501640573, 'k10_inv': 0.08496210866639049, 'k11_inv': 0.07155118123278026, 'k12_inv': 0.07243527249845134, 'k13_inv': 0.06526034949553097, 'k14_inv': 0.07747673265271753, 'k15_inv': 0.07297231817729116, 'k16_inv': 0.07691626738154421, 'k17_inv': 0.09279987155577112, 'k18_inv': 0.07483917669417857, 'k19_inv': 0.06741287134221452}
+best_solution = list(best_solution.values()) + list(k_inv.values())
 
-optimal_k = {'k0:': 1.2172602014196947, 'k1:': 0.1934035914469369, 'k2:': 0.25045540569692953,
-             'k3:': 0.25144598438019355, 'k4:': 0.23206605044260536, 'k5:': 0.20560900900387588,
-             'k6:': 0.18056311883156892, 'k7:': 0.15806090080216914, 'k8:': 0.1389178936322163,
-             'k9:': 0.12331100791784368, 'k10:': 0.1113245694477911, 'k11:': 0.1014502045675814,
-             'k12:': 0.09408618233319259, 'k13:': 0.08877483047633453, 'k14:': 0.08518023785617802,
-             'k15:': 0.08322635591728118, 'k16:': 0.08286008338459744, 'k17:': 0.08405512800593015,
-             'k18:': 0.08699439309974785, 'k19:': 0.0918542859140179, 'k20:': 0.09897876045584161,
-             'k21:': 0.10890965894272928, 'k22:': 0.12243372523167667, 'k23:': 0.14067192393563266,
-             'k24:': 0.16528153590796674, 'k25:': 0.1986573168511293, 'k26:': 0.24446727282340863,
-             'k27:': 0.3076782892554301, 'k28:': 0.39696521235611604, 'k29:': 0.5241343759630537,
-             'k30:': 0.7084928661748607, 'k31:': 0.9777065788883984, 'k32:': 1.4069943672684238,
-             'k33:': 2.054376704026014, 'k34:': 3.0536493682198924, 'k35:': 4.629409240188316,
-             'k36:': 7.096255777703563, 'k37:': 10.894731813797177, 'k38:': 16.999938415579383,
-             'k39:': 23.99994486145106}
-optimal_k = list(optimal_k.values())
+initial_k = list(best_solution)
 
-result_final = minimize(objective, optimal_k, method='L-BFGS-B',bounds=bounds, tol=1e-8, callback=callback, options={'maxiter':1000})
-optimal_k = result_final.x
-final_precision = result_final.fun
-
-print("反应系数K是:", {f"k{i}:": c for i, c in enumerate(optimal_k, start=0)})
-print("最终优化精度:", final_precision)
-
-t = np.linspace(0, 200, 1000)
-sol = odeint(equations, initial_p, t, args=(optimal_k,))
+t = np.linspace(0, 1000, 1000)
+sol = odeint(equations, initial_p, t, args=(initial_k,))
 
 # 绘制理想稳态浓度曲线
 plt.figure(figsize=(15, 8))
@@ -236,16 +180,16 @@ plt.plot(range(len(x_values)), final_concentrations, label = 'Actual Concentrati
 plt.grid(True)
 plt.show()
 
-plot_concentration_combined(t, sol)
+# plot_concentration_combined(t, sol)
 
 plt.figure(figsize=(8, 15))
-for i in range(41):
+for i in range(21):
     plt.plot(t, sol[:, i], label=f'p{i}')
 plt.legend()
 plt.xlabel('Time')
 plt.ylabel('Concentration')
-plt.title('P0-P40 Concentration over Time')
+plt.title('P0-P20 Concentration over Time')
 plt.grid(True)
 plt.show()
 
-plot_k_lnp_curves(pm, optimal_k[1:])
+plot_k_lnp_curves(pm, best_solution[1:])

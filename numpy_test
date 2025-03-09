@@ -3,6 +3,8 @@ from scipy.optimize import minimize
 from scipy.integrate import odeint
 from matplotlib import pyplot as plt
 
+objective_values = []
+
 # 正态分布模拟，得到的结果用于物质稳态浓度
 def simulate_normal_distribution(mu, sigma, total_concentration, x_values, scale_factor):
     concentrations = np.exp(-0.5 * ((x_values - mu) / sigma) ** 2) / (sigma * np.sqrt(2 * np.pi))
@@ -11,36 +13,60 @@ def simulate_normal_distribution(mu, sigma, total_concentration, x_values, scale
     return concentrations
 
 # 定义非线性微分方程组
-def equations_1(p, t, k):
+def equations(p, t, k_values):
     dpdt = np.zeros_like(p)
+    k = k_values[:30]
+    k_inv = k_values[30:]
     dpdt[0] = - k[0] * p[0]
-    dpdt[1] = k[0] * p[0] - k[1] * p[1] ** 2
+    dpdt[1] = k[0] * p[0] + k_inv[0] * p[2] - k[1] * p[1] ** 2
     for i in range(2, 30):
-        dpdt[i] = k[i - 1] * p[i - 1] ** 2 - k[i] * p[i] ** 2
-    dpdt[30] = k[29] * p[29] ** 2
+        dpdt[i] = k[i - 1] * p[i - 1] ** 2 + k_inv[i - 1] * p[i + 1] - k_inv[i - 2] * p[i] - k[i] * p[i] ** 2
+    dpdt[30] = k[29] * p[29] ** 2 - k_inv[28] * p[30]
     return dpdt
+
+# 定义目标函数
+def objective_global(k):
+    initial_p = [10.0] + [0] * 40
+    t = np.linspace(0, 800, 1000)
+    # 求解微分方程
+    sol = odeint(equations, initial_p, t, args=(k,))
+    final_p = sol[-1, :] # 取最终浓度
+    # 理想最终浓度
+    ideal_p = [0] + list(target_p)
+    # 计算误差
+    sum_error = np.sum((final_p - ideal_p)**2)
+
+    return sum_error
+
+def callback(xk):
+    current_value = objective_global(xk)
+    objective_values.append(current_value)
+    if len(objective_values) > 1:
+        change = np.abs(objective_values[-1] - objective_values[-2])
+        print(f"迭代次数 {len(objective_values) - 1}: 变化 = {change}, 精度 = {objective_values[-1]}")
 
 # 求得理想最终浓度
 target_p = simulate_normal_distribution(mu=15.5, sigma=6, total_concentration=1.0, x_values=np.arange(1, 31), scale_factor=10.0)
 x_values = [f'P{i}' for i in range(1, 31)]  # 定义图像横坐标
 print("理想最终浓度", {f'P{i}': c for i, c in enumerate(target_p, start=1)})
 
-best_solution = {'k0': 2.0, 'k1': 9.825244292822596, 'k2': 0.8503415212609342, 'k3': 3.3216504279382835,
-                 'k4': 0.009962887683455518, 'k5': 0.013645823213038706, 'k6': 0.011059593447980232,
-                 'k7': 0.010773205481664043, 'k8': 0.010325360607240281, 'k9': 0.011258250260798026,
-                 'k10': 0.008310738059146294, 'k11': 0.008443524499610283, 'k12': 0.009072642912653948,
-                 'k13': 0.008386889117749203, 'k14': 0.009365275587989542, 'k15': 0.010338261429751921,
-                 'k16': 0.011192071412421074, 'k17': 0.013527679832290878, 'k18': 0.018574968844816728,
-                 'k19': 0.02225655909530628, 'k20': 0.02819445954763219, 'k21': 0.04018131558472931,
-                 'k22': 0.0474626269526003, 'k23': 0.07738608445228103, 'k24': 0.13587819328868964,
-                 'k25': 0.1769976097331164, 'k26': 0.35880574432026224, 'k27': 0.8787766985077006,
-                 'k28': 0.5923819599927869, 'k29': 3.0443920129580446}
+bounds = [(0, 10.0)] * 40
+
+best_solution = {'k0': 1.0, 'k1': 0.6374459142549053, 'k2': 0.5909872375818727, 'k3': 0.5334889725592669, 'k4': 0.633790304489533, 'k5': 0.48869501383997266, 'k6': 0.4087493137867532, 'k7': 0.3096518234063363, 'k8': 0.33206941678037344, 'k9': 0.19303893738147637, 'k10': 0.21650926598695058, 'k11': 0.16820938220136702, 'k12': 0.15076832850386312, 'k13': 0.12675036408458026, 'k14': 0.13391467328190346, 'k15': 0.1151496990605652, 'k16': 0.11244819804092782, 'k17': 0.12396732113252969, 'k18': 0.12223630260852632, 'k19': 0.12403467481671909, 'k20': 0.13084249664498057, 'k21': 0.14798950032799943, 'k22': 0.1756045409973865, 'k23': 0.1841503389621902, 'k24': 0.19229589447329085, 'k25': 0.2643382456839131, 'k26': 0.32407316602445646, 'k27': 0.43593072604631106, 'k28': 0.9077819232214837, 'k29': 0.9998606150123006
+, 'k1_inv': 0.015685454158095562, 'k2_inv': 0.022058845977566528, 'k3_inv': 0.029378094287546157, 'k4_inv': 0.050080759091332944, 'k5_inv': 0.05389268283623707, 'k6_inv': 0.061185613741359814, 'k7_inv': 0.06119315697021365, 'k8_inv': 0.08426203317302719, 'k9_inv': 0.06117273064039127, 'k10_inv': 0.08333658063300217, 'k11_inv': 0.0764877407147863, 'k12_inv': 0.0787716954279837, 'k13_inv': 0.07400553204792859, 'k14_inv': 0.08498335125720893, 'k15_inv': 0.07724955545721426, 'k16_inv': 0.07756189668646492, 'k17_inv': 0.08550695882421057, 'k18_inv': 0.08200277392646999, 'k19_inv': 0.07871173517262754, 'k20_inv': 0.07639152152366133, 'k21_inv': 0.07731386476413164, 'k22_inv': 0.0798404743311395, 'k23_inv': 0.07086385035725641, 'k24_inv': 0.06090840050565157, 'k25_inv': 0.06702976833055468, 'k26_inv': 0.06397491799947311, 'k27_inv': 0.06516079446797532, 'k28_inv': 0.0999984964927814, 'k29_inv': 0.07890852869402838}
 best_solution = list(best_solution.values())
+
+# results = minimize(objective_global, best_solution, bounds=bounds, method='L-BFGS-B', tol=1e-8, options={'maxiter': 1000}, callback=callback)
+
+# optimal_k = results.x
+# print("最终的系数k:", {f'k{i}': c for i, c in enumerate(optimal_k, start=0)})
+# print("最终精度:", results.fun)
+
 
 # 使用得到的系数求解
 initial_p = [10.0] + [0] * 30
 t = np.linspace(0, 1000, 1000)
-sol = odeint(equations_1, initial_p, t, args=(best_solution,))
+sol = odeint(equations, initial_p, t, args=(best_solution,))
 
 # 绘制理想稳态浓度曲线
 plt.figure(figsize=(15, 8))
@@ -86,12 +112,12 @@ plt.title('P21-P30 Concentration over Time')
 plt.grid(True)
 plt.show()
 
-# plt.figure(figsize=(15, 8))
-# for i in range(31, 41):
-#     plt.plot(t, sol[:, i], label=f'p{i}')
-# plt.legend()
-# plt.xlabel('Time')
-# plt.ylabel('Concentration')
-# plt.title('P31-P40 Concentration over Time')
-# plt.grid(True)
-# plt.show()
+plt.figure(figsize=(15, 8))
+for i in range(31, 41):
+    plt.plot(t, sol[:, i], label=f'p{i}')
+plt.legend()
+plt.xlabel('Time')
+plt.ylabel('Concentration')
+plt.title('P31-P40 Concentration over Time')
+plt.grid(True)
+plt.show()

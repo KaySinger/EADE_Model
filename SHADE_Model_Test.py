@@ -11,31 +11,44 @@ def simulate_normal_distribution(mu, sigma, total_concentration, x_values, scale
     return concentrations
 
 # 定义非线性微分方程组
-def equations(p, t, k):
+def equations(p, t, k_values):
     dpdt = np.zeros_like(p)
+    k = k_values[:30]
+    k_inv = k_values[30:]
     dpdt[0] = - k[0] * p[0]
-    dpdt[1] = k[0] * p[0] - k[1] * (p[1]**2)
-    for i in range(2, 40):
-        dpdt[i] = k[i-1] * (p[i-1]**2) - k[i] * (p[i]**2)
-    dpdt[40] = k[39] * (p[39]**2)
+    dpdt[1] = k[0] * p[0] + k_inv[0] * p[2] - k[1] * p[1] ** 2
+    for i in range(2, 30):
+        dpdt[i] = k[i - 1] * p[i - 1] ** 2 + k_inv[i - 1] * p[i + 1] - k_inv[i - 2] * p[i] - k[i] * p[i] ** 2
+    dpdt[30] = k[29] * p[29] ** 2 - k_inv[28] * p[30]
     return dpdt
 
 # 定义目标函数
 def objective_global(k):
-    initial_p = [10.0] + [0] * 40
-    t = np.linspace(0, 1000, 1000)
+    # 正向系数递增性惩罚项
+    k_forward = k[1:30]
+    penalty = 0.0
+    # 计算所有相邻k的递减量，若k[i+1] < k[i]则施加惩罚
+    for i in range(len(k_forward) - 1):
+        if k_forward[i + 1] < k_forward[i]:
+            penalty += (k_forward[i] - k_forward[i + 1]) ** 2  # 平方惩罚项
+    penalty_weight = 1e6  # 惩罚权重（根据问题规模调整）
+    total_penalty = penalty_weight * penalty
+
+    initial_p = [10.0] + [0] * 30
+    t = np.linspace(0, 2000, 2000)
     # 求解微分方程
     sol = odeint(equations, initial_p, t, args=(k,))
-    final_p = sol[-1, :] # 取最终浓度
-    # 理想最终浓度
-    ideal_p = [0] + list(target_p)
-    # 计算误差
-    sum_error = np.sum((final_p - ideal_p)**2)
+    # 选取t>=900时的所有解（假设t=1000时有1000个点，索引900对应t=900）
+    selected_sol = sol[1800:, :]
+    # 理想浓度
+    ideal_p = np.array([0] + list(target_p))
+    # 计算所有选中时间点的误差平方和
+    sum_error = np.sum((selected_sol - ideal_p) ** 2)
 
-    return sum_error
+    return sum_error + total_penalty
 
 
-def shade(func, bounds, pop_size=None, max_gen=None, hist_size=10, tol=1e-6):
+def shade(func, bounds, pop_size=None, max_gen=None, hist_size=300, tol=1e-6):
     dim = len(bounds)
     archive = []
     H = hist_size
@@ -44,7 +57,17 @@ def shade(func, bounds, pop_size=None, max_gen=None, hist_size=10, tol=1e-6):
     iteration_log = []
 
     # 初始化种群
-    pop = np.random.uniform(low=[b[0] for b in bounds], high=[b[1] for b in bounds], size=(pop_size, dim))
+    # 使用拉丁超立方采样生成初始种群
+    pop = np.zeros((pop_size, dim))
+    for j in range(dim):
+        lower, upper = bounds[j]
+        # 将参数范围分成 pop_size 个等宽区间
+        edges = np.linspace(lower, upper, pop_size + 1)
+        # 在每个区间内随机采样一个点
+        points = np.random.uniform(edges[:-1], edges[1:], size=pop_size)
+        # 打乱顺序以消除维度间的相关性
+        np.random.shuffle(points)
+        pop[:, j] = points
     fitness = np.apply_along_axis(func, 1, pop)
 
     for gen in range(max_gen):
@@ -120,16 +143,17 @@ def visualize_fitness():
     plt.show()
 
 # 设置变量边界
-bounds = np.array([(2.0, 2.0)] + [(0.001, 20.0)] * 39)
+bounds = np.array([(1.0, 1.0)] + [(0, 1.0)] * 29 + [(0, 0.1)] * 29)
 
 # 求得理想最终浓度
-target_p = simulate_normal_distribution(mu=20.5, sigma=8, total_concentration=1.0, x_values=np.arange(1, 41), scale_factor=10.0)
-x_values = [f'P{i}' for i in range(1, 41)]  # 定义图像横坐标
+target_p = simulate_normal_distribution(mu=15.5, sigma=8, total_concentration=1.0, x_values=np.arange(1, 31), scale_factor=10.0)
+x_values = [f'P{i}' for i in range(1, 31)]  # 定义图像横坐标
 print("理想最终浓度", {f'P{i}': c for i, c in enumerate(target_p, start=1)})
 
 # 运行差分进化算法
-best_solution, best_fitness, fitness_history = shade(objective_global, bounds=bounds, pop_size=400, max_gen=4000, hist_size=100, tol=1e-6)
-print("全局优化得到的系数k:", {f'k{i}': c for i, c in enumerate(best_solution, start=0)})
+best_solution, best_fitness, fitness_history = shade(objective_global, bounds=bounds, pop_size=300, max_gen=5000, hist_size=300, tol=1e-6)
+print("全局优化得到的系数k:", {f'k{i}': c for i, c in enumerate(best_solution[:30], start=0)})
+print("全局优化得到的系数k_inv:", {f'k{i}_inv': c for i, c in enumerate(best_solution[30:], start=1)})
 print("最终精度:", best_fitness)
 
 visualize_fitness()
@@ -145,8 +169,8 @@ visualize_fitness()
 # print("最终优化精度:", final_precision)
 
 # 使用得到的系数求解
-initial_p = [10.0] + [0] * 40
-t = np.linspace(0, 1000, 1000)
+initial_p = [10.0] + [0] * 30
+t = np.linspace(0, 2000, 2000)
 sol = odeint(equations, initial_p, t, args=(best_solution,))
 
 # 绘制理想稳态浓度曲线
